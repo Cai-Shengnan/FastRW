@@ -3,6 +3,8 @@ import math
 import random
 import os
 import matplotlib.pyplot as plt
+from concurrent.futures import ProcessPoolExecutor
+from tqdm import tqdm
 
 # --- Define the 3D chip geometry and material properties ---
 Lx = 0.02  # Chip length in x-direction (20 mm)
@@ -99,7 +101,7 @@ power_map_stack_top    = normalize_power_map(power_map_4core2, total_power_W=50.
 
 
 # --- Random walk for a single particle ---
-def random_walk(start_x, start_y, start_z, topBC, bottomBC, power_map_bottom, power_map_top=None):
+def random_walk(start_x, start_y, start_z, topBC, bottomBC, power_map_bottom, power_map_top=None, seed=None):
     """
     Perform one random walk path starting at (start_x, start_y, start_z).
     Returns the temperature contribution from this path (in °C).
@@ -107,6 +109,10 @@ def random_walk(start_x, start_y, start_z, topBC, bottomBC, power_map_bottom, po
     - power_map_bottom: 2D array for heat generation in bottom part of heat region.
     - power_map_top: 2D array for heat generation in top part of heat region (if stacked), otherwise None.
     """
+    # Initialize random generator for this walk. Using a dedicated RNG ensures
+    # independent sequences across processes when executed in parallel.
+    rng = random.Random(seed)
+
     # Initialize the particle at the start position
     x, y, z = start_x, start_y, start_z
     T_path = 0.0   # accumulative temperature contribution from sources along this path
@@ -135,8 +141,8 @@ def random_walk(start_x, start_y, start_z, topBC, bottomBC, power_map_bottom, po
         if dist_to_bound > 0.0002:  # threshold (e.g., 0.2 mm) for a "far" distance
             R = dist_to_bound  # radius to nearest boundary
             # Random direction on a sphere (isotropic)
-            theta = math.acos(2*random.random() - 1) - math.pi/2   # polar angle
-            phi = 2 * math.pi * random.random()                   # azimuthal angle
+            theta = math.acos(2*rng.random() - 1) - math.pi/2   # polar angle
+            phi = 2 * math.pi * rng.random()                   # azimuthal angle
             # Spherical to Cartesian offset
             dx = R * math.cos(theta) * math.cos(phi)
             dy = R * math.cos(theta) * math.sin(phi)
@@ -146,9 +152,9 @@ def random_walk(start_x, start_y, start_z, topBC, bottomBC, power_map_bottom, po
             # We approximate thermal diffusivity D ~ k/(ρc) as constant for step size calculation.
             # For simplicity, treat D such that sqrt(2*D*dt) ~ sqrt(2*dt) (i.e., ρc normalized to 1).
             sigma = math.sqrt(2 * dt)
-            dx = random.gauss(0, sigma)
-            dy = random.gauss(0, sigma)
-            dz = random.gauss(0, sigma)
+            dx = rng.gauss(0, sigma)
+            dy = rng.gauss(0, sigma)
+            dz = rng.gauss(0, sigma)
         
         # Propose new position
         new_x = x + dx
@@ -176,7 +182,7 @@ def random_walk(start_x, start_y, start_z, topBC, bottomBC, power_map_bottom, po
                 # Robin: decide absorption vs reflection based on convective strength
                 # Compute an absorption probability ~ (h*area*dt)/C. We approximate by a fixed small p.
                 p_absorb = min(1.0, h_coeff * dt / (k_local * 0.1))  # simple estimate of absorption probability
-                if random.random() < p_absorb:
+                if rng.random() < p_absorb:
                     # Absorbed into convective sink at ambient temperature
                     return T_ambient + T_path
                 else:
@@ -192,7 +198,7 @@ def random_walk(start_x, start_y, start_z, topBC, bottomBC, power_map_bottom, po
                 return T_fixed + T_path
             elif topBC == ROBIN:
                 p_absorb = min(1.0, h_coeff * dt / (k_local * 0.1))
-                if random.random() < p_absorb:
+                if rng.random() < p_absorb:
                     return T_ambient + T_path
                 else:
                     new_z = 2*z_top - new_z  # reflect inside
@@ -223,6 +229,12 @@ def random_walk(start_x, start_y, start_z, topBC, bottomBC, power_map_bottom, po
     return T_ambient + T_path
 
 
+# Helper wrapper so that random_walk can be executed via ``ProcessPoolExecutor``
+def random_walk_worker(args):
+    """Unpack arguments tuple and execute :func:`random_walk`."""
+    return random_walk(*args)
+
+
 # --- Simulate each case and visualize results ---
 def simulate_case(case_name,
                   topBC,
@@ -231,7 +243,9 @@ def simulate_case(case_name,
                   power_map_top=None,
                   grid_points=15,
                   num_paths=2000,
-                  save_path=None):
+                  save_path=None,
+                  parallel=True,
+                  workers=None):
     """
     Monte Carlo simulate the temperature field for a given case.
     Returns a 2D array of temperatures for points in the heat-source layer.
@@ -249,23 +263,62 @@ def simulate_case(case_name,
     save_path : str or None
         Full path (including filename) where the figure will be written.
         If None, defaults to "./{case_name}_temperature.png".
+    parallel : bool
+        If True, execute individual random walk paths in parallel using
+        ``ProcessPoolExecutor``.
+    workers : int or None
+        Number of worker processes for parallel execution. ``None`` lets
+        the executor decide.
     """
     temps = np.zeros((grid_points, grid_points))
     xs = np.linspace(0, Lx, grid_points)
     ys = np.linspace(0, Ly, grid_points)
     mid_z = (z_heat_bottom + z_heat_top) / 2.0  # sample at mid-thickness of heat layer
 
-    for i, yy in enumerate(ys):
-        for j, xx in enumerate(xs):
-            T_sum = 0.0
-            # Launch multiple random walks from this point to estimate T
-            for _ in range(num_paths):
-                T_sample = random_walk(xx, yy, mid_z,
-                                        topBC, bottomBC,
-                                        power_map_bottom,
-                                        power_map_top)
-                T_sum += T_sample
-            temps[i, j] = T_sum / num_paths
+    executor = ProcessPoolExecutor(max_workers=workers) if parallel else None
+    total_paths = grid_points * grid_points * num_paths
+    progress = tqdm(total=total_paths, desc=f"{case_name} random walks")
+    try:
+        for i, yy in enumerate(ys):
+            for j, xx in enumerate(xs):
+                seeds = [random.randint(0, 2**32 - 1) for _ in range(num_paths)]
+                if parallel:
+                    params = [
+                        (
+                            xx,
+                            yy,
+                            mid_z,
+                            topBC,
+                            bottomBC,
+                            power_map_bottom,
+                            power_map_top,
+                            s,
+                        )
+                        for s in seeds
+                    ]
+                    T_sum = 0.0
+                    for res in executor.map(random_walk_worker, params):
+                        T_sum += res
+                        progress.update(1)
+                else:
+                    T_sum = 0.0
+                    for s in seeds:
+                        T_sum += random_walk(
+                            xx,
+                            yy,
+                            mid_z,
+                            topBC,
+                            bottomBC,
+                            power_map_bottom,
+                            power_map_top,
+                            s,
+                        )
+                        progress.update(1)
+                temps[i, j] = T_sum / num_paths
+    finally:
+        progress.close()
+        if executor is not None:
+            executor.shutdown()
 
     print(f"{case_name}: Simulation complete. "
           f"Estimated T range = {temps.min():.2f} to {temps.max():.2f} °C")
