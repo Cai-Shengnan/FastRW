@@ -90,7 +90,8 @@ class GeometryConfig:
         return self.get_region_by_z(z_index)
 
     def is_near_boundary(self, pos):
-        x, y, z = pos
+       
+        z, y, x = pos
 
         if z >= (self.nz_total - 1) * self.z_resolution - self.boundary_epsilon[self.z_boundary_types['top']]:
             return 'top', self.z_boundary_types['top'], self.z_boundary_params['top']

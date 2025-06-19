@@ -16,18 +16,12 @@ class RandomWalker:
         self.eps = eps
         self.delta_x = delta_x  # WOS 跳跃半径 Δx
 
-        self.dx = geometry_config.xy_resolution
-        self.dy = geometry_config.xy_resolution
-        self.dz = geometry_config.z_resolution
-
     def simulate_temperature(self, x0_meter, N=1000, num_workers=None):
         args = [x0_meter] * N
         num_workers = num_workers or cpu_count()
         with Pool(num_workers) as pool:
             results = list(tqdm(pool.imap(self._simulate_single_path_wrapper, args), total=N))
-        temps = [r[0] for r in results]
-        trajs = [r[1] for r in results]
-        return np.mean(temps), trajs
+        return np.mean(results)
 
     def _simulate_single_path_wrapper(self, x0_meter):
         return self.simulate_single_path(x0_meter)
@@ -50,8 +44,10 @@ class RandomWalker:
                 else:
                     pos = self._step_wos(pos)
             else:  
+                
+            
                 if bc_type == 'Dirichlet':
-                    phi = self._get_dirichlet_value(pos)
+                    phi = bc_param
                     T_i += e_hat * phi
                     break
                 else:
@@ -77,7 +73,7 @@ class RandomWalker:
                         dL = self._estimate_local_time_increment(bc_type)
                         phi = bc_param
                         k = 395
-                        c =  -phi / k
+                        c =  - phi / k
                         e_hat *= np.exp(c * dL)
                         T_i += e_hat * phi * dL
                         pos = self._step_wos(pos, step_lenth)
@@ -88,9 +84,9 @@ class RandomWalker:
 
     def _get_heat_reward(self, pos):
         z, y, x = pos
-        iz = int(z / self.dz)
-        iy = int(y / self.dy)
-        ix = int(x / self.dx)
+        iz = int(z / self.geom.z_resolution)
+        iy = int(y / self.geom.xy_resolution)
+        ix = int(x / self.geom.xy_resolution)
         if 0 <= iz < self.geom.nz_heat and 0 <= iy < self.geom.ny and 0 <= ix < self.geom.nx:
             gt = self._get_gt((z, y, x))
             p = self.geom.power_density[iz, iy, ix]
@@ -107,7 +103,8 @@ class RandomWalker:
     def _estimate_local_time_increment(self, bc_type):
         epsilon = self.geom.boundary_epsilon[bc_type]
         delta = self.delta_x
-        return (delta ** 2) / (6 * epsilon)
+        return (delta ** 2) / (6 * epsilon) # 这里【24】说是3，但是文章说是6， 我们试一下
+    
 
     def _step_wos(self, pos, radius = None):
         """
@@ -120,6 +117,7 @@ class RandomWalker:
         region = self.geom.get_region_by_coord(z)
 
         if region not in ["top", "bottom"]:
+            import pdb; pdb.set_trace()
             raise ValueError
 
         # -------------------------------
@@ -128,11 +126,11 @@ class RandomWalker:
         if radius is None:
             
             if region == 'top':
-                z_upper = self.geom.z_top[1] * self.dz
-                r_z = min(z - self.geom.z_heat[1] * self.dz, z_upper - z)
+                z_upper = self.geom.z_top[1] * self.geom.z_resolution
+                r_z = min(z - self.geom.z_heat[1] * self.geom.z_resolution, z_upper - z)
             else:
-                z_lower = self.geom.z_bottom[0] * self.dz
-                r_z = min(self.geom.z_heat[0] * self.dz - z, z - z_lower)
+                z_lower = self.geom.z_bottom[0] * self.geom.z_resolution
+                r_z = min(self.geom.z_heat[0] * self.geom.z_resolution - z, z - z_lower)
 
             # XY方向边界限制
             r_x = min(x, self.geom.x_size - x)
@@ -143,6 +141,7 @@ class RandomWalker:
             # -------------------------------
             # Case 2: 吸收带中的 WOS 半径调整
             # -------------------------------
+            # 直接用给定的输入
             pass  
             
 
@@ -159,13 +158,13 @@ class RandomWalker:
         # 如果落入虚拟区：吸附到网格中心
         new_region = self.geom.get_region_by_coord(new_pos[0])
         if new_region in ['virtual_top', 'virtual_bottom']:
-            z_idx = int(new_pos[0] / self.dz)
-            y_idx = int(new_pos[1] / self.dy)
-            x_idx = int(new_pos[2] / self.dx)
+            z_idx = int(new_pos[0] / self.geom.z_resolution)
+            y_idx = int(new_pos[1] / self.geom.xy_resolution)
+            x_idx = int(new_pos[2] / self.geom.xy_resolution)
 
-            z_snap = (z_idx + 0.5) * self.dz
-            y_snap = (y_idx + 0.5) * self.dy
-            x_snap = (x_idx + 0.5) * self.dx
+            z_snap = (z_idx + 0.5) * self.geom.z_resolution
+            y_snap = (y_idx + 0.5) * self.geom.xy_resolution
+            x_snap = (x_idx + 0.5) * self.geom.xy_resolution
 
             return np.array([z_snap, y_snap, x_snap])
 
@@ -176,12 +175,12 @@ class RandomWalker:
         total_g = sum(g_dict.values())
 
         directions = {
-            '+x': np.array([0, 0, self.dx]),
-            '-x': np.array([0, 0, -self.dx]),
-            '+y': np.array([0, self.dy, 0]),
-            '-y': np.array([0, -self.dy, 0]),
-            '+z': np.array([self.dz, 0, 0]),
-            '-z': np.array([-self.dz, 0, 0]),
+            '+x': np.array([0, 0, self.geom.xy_resolution]),
+            '-x': np.array([0, 0, -self.geom.xy_resolution]),
+            '+y': np.array([0, self.geom.xy_resolution, 0]),
+            '-y': np.array([0, -self.geom.xy_resolution, 0]),
+            '+z': np.array([self.geom.z_resolution, 0, 0]),
+            '-z': np.array([-self.geom.z_resolution, 0, 0]),
         }
 
         probs = np.array([g_dict[dir] for dir in directions]) / total_g
