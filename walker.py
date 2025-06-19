@@ -203,9 +203,13 @@ class RandomWalker:
         - 若 z 超界，也回退至边界
         """
         z, y, x = pos
-        x = min(max(x, 0), self.geom.x_size)
-        y = min(max(y, 0), self.geom.y_size)
-        z = min(max(z, 0), self.geom.nz_total * self.geom.z_resolution)
+        x_max = (self.geom.nx - 1) * self.geom.xy_resolution
+        y_max = (self.geom.ny - 1) * self.geom.xy_resolution
+        z_max = (self.geom.nz_total - 1) * self.geom.z_resolution
+
+        x = min(max(x, 0), x_max)
+        y = min(max(y, 0), y_max)
+        z = min(max(z, 0), z_max)
         return np.array([z, y, x])
 
 
