@@ -9,12 +9,12 @@ class GeometryConfig:
                  xy_resolution=1e-4,
                  z_resolution=2e-5,  # 默认 0.02 mm
                  z_boundary_types=('Robin', 'Dirichlet'),
-                 z_boundary_params=(8700, 70),
+                 z_boundary_params=(8700, 343.15),
                  lateral_boundary_type='Neumann',
                  lateral_boundary_params=(0),
-                 boundary_epsilon={'Dirichlet': 1e-8, 'Neumann': 1.36 * 5e-7, 'Robin': 1.36 * 5e-7}
+                 boundary_epsilon={'Dirichlet': 1e-8, 'Neumann': 1.22 * 5e-7, 'Robin': 1.22 * 5e-7}
                  ):
-
+        self.T_am = 20
         # === 几何尺寸与网格配置 ===
         self.x_size = x_size
         self.y_size = y_size
@@ -24,9 +24,10 @@ class GeometryConfig:
         self.virtual_layer_thickness = z_resolution
         self.xy_resolution = xy_resolution
         self.z_resolution = z_resolution
+        # self.total_thickness = bottom_thickness + heat_source_thickness + top_thickness
 
         # === 空间网格划分 ===
-        self.nx = int(x_size / xy_resolution)
+        self.nx = int(x_size / xy_resolution)  #total_nx = nx + 1
         self.ny = int(y_size / xy_resolution)
         self.nz_bottom = int(self.bottom_thickness / z_resolution)
         self.nz_heat = int(heat_source_thickness / z_resolution)
@@ -57,11 +58,11 @@ class GeometryConfig:
         # === 初始化热源 ===
         self.power_density = np.zeros((self.nz_heat, self.ny, self.nx))  # [z, y, x]
 
-        self._initialize_heat_sources()
+        self._initialize_heat_sources(padding = True)
 
-    def _initialize_heat_sources(self):
+    def _initialize_heat_sources(self, padding = False):
         patch_size = int(0.005 / self.xy_resolution)  # 每个方向5mm，对应的格点数
-        power_value = 1e6  # W/m³
+        power_density_value = 3.56e10 # W/m³
 
         x_starts = [int(0.25 * self.nx - patch_size/2.0), int(0.75 * self.nx - patch_size/2.0)]
         y_starts = [int(0.25 * self.ny - patch_size/2.0), int(0.75 * self.ny - patch_size/2.0)]
@@ -69,7 +70,15 @@ class GeometryConfig:
         for y0 in y_starts:
             for x0 in x_starts:
                 for z in range(self.nz_heat):
-                    self.power_density[z, y0:y0 + patch_size, x0:x0 + patch_size] = power_value
+                    self.power_density[z, y0:y0 + patch_size, x0:x0 + patch_size] = power_density_value * self.xy_resolution**2 * self.z_resolution
+
+        if padding:
+            power_tmp  = np.zeros((self.power_density.shape[0], self.power_density.shape[1]+1, self.power_density.shape[2]+1))
+            power_tmp[:,0:-1,0:-1] = self.power_density
+            power_tmp[:,-1,0:-1] = self.power_density[:,-1,:]
+            power_tmp[:,0:-1,-1] = self.power_density[:,:,-1]
+            self.power_density = power_tmp
+
 
     def get_region_by_z(self, z_index):
         if self.z_bottom[0] <= z_index <= self.z_bottom[1]:
@@ -80,20 +89,20 @@ class GeometryConfig:
             return 'heat_source'
         elif self.z_virtual2[0] <= z_index <= self.z_virtual2[1]:
             return 'virtual_top'
-        elif self.z_top[0] <= z_index <= self.z_top[1]:
+        elif self.z_top[0] <= z_index <= self.z_top[1]+1:
             return 'top'
         else:
             return 'out_of_domain'
 
     def get_region_by_coord(self, z_coord):
-        z_index = int(z_coord / self.z_resolution)
+        z_index = int(np.floor(z_coord / self.z_resolution))
         return self.get_region_by_z(z_index)
 
     def is_near_boundary(self, pos):
        
         z, y, x = pos
 
-        if z >= (self.nz_total - 1) * self.z_resolution - self.boundary_epsilon[self.z_boundary_types['top']]:
+        if z >= self.nz_total * self.z_resolution - self.boundary_epsilon[self.z_boundary_types['top']]:  ##mark
             return 'top', self.z_boundary_types['top'], self.z_boundary_params['top']
 
         if z <= self.boundary_epsilon[self.z_boundary_types['bottom']]:
@@ -106,12 +115,13 @@ class GeometryConfig:
         输入物理坐标 (z, y, x) 单位为米
         返回当前位置与6个方向相邻点之间的电导率 (W/K)，格式为 dict
         """
+     
         z, y, x = pos_meter
 
         # 将物理坐标转为索引
-        ix = int(x / self.xy_resolution)
-        iy = int(y / self.xy_resolution)
-        iz = int(z / self.z_resolution)
+        ix = int(np.floor(x / self.xy_resolution))
+        iy = int(np.floor(y / self.xy_resolution))
+        iz = int(np.floor(z / self.z_resolution))
 
         # 辅助函数：判断某个索引点的热导率
         def get_k(iz_index):
@@ -126,7 +136,7 @@ class GeometryConfig:
 
         conductance = {}
 
-        for direction, shift in {
+        for direction, shift in {           #tianshu: random sampling?
             '+x': (0, 0, +1),
             '-x': (0, 0, -1),
             '+y': (0, +1, 0),
@@ -157,7 +167,7 @@ class GeometryConfig:
                 d = dz
 
             if out_of_bounds:
-                # 使用镜像边界近似：使用自身热导率计算对称导通
+                # 使用镜像边界近似：使用自身热导率计算对称导通  tianshu:??
                 if direction in ['+x', '-x', '+y', '-y']:
                     r = (1 / k_center) * (d / A)
                     g = 1 / r
