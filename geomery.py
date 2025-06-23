@@ -60,6 +60,83 @@ class GeometryConfig:
 
         self._initialize_heat_sources(padding = True)
 
+        # === Pre-compute conductance for each grid point ===
+        self._precompute_conductance()
+
+    def _precompute_conductance(self):
+        """Pre-compute conductance for every grid point to accelerate ROG."""
+
+        dirs = ['+x', '-x', '+y', '-y', '+z', '-z']
+        self._conductance_table = np.zeros(
+            (self.nz_total, self.ny, self.nx, len(dirs)), dtype=float
+        )
+
+        for iz in range(self.nz_total):
+            for iy in range(self.ny):
+                for ix in range(self.nx):
+                    g = self._compute_conductance_indices(iz, iy, ix)
+                    self._conductance_table[iz, iy, ix, :] = [g[d] for d in dirs]
+
+        self._dir_order = dirs
+
+    def _compute_conductance_indices(self, iz, iy, ix):
+        """Compute conductance at a grid index position."""
+
+        def get_k(z_idx):
+            region = self.get_region_by_z(z_idx)
+            return 125 if region == 'heat_source' else 395
+
+        k_center = get_k(iz)
+        dx = self.xy_resolution
+        dy = self.xy_resolution
+        dz = self.z_resolution
+
+        conductance = {}
+        shifts = {
+            '+x': (0, 0, +1),
+            '-x': (0, 0, -1),
+            '+y': (0, +1, 0),
+            '-y': (0, -1, 0),
+            '+z': (+1, 0, 0),
+            '-z': (-1, 0, 0),
+        }
+
+        for direction, shift in shifts.items():
+            iz_n = iz + shift[0]
+            iy_n = iy + shift[1]
+            ix_n = ix + shift[2]
+
+            out_of_bounds = (
+                ix_n < 0 or ix_n >= self.nx or
+                iy_n < 0 or iy_n >= self.ny or
+                iz_n < 0 or iz_n >= self.nz_total
+            )
+
+            if direction in ['+x', '-x']:
+                A = dy * dz
+                d = dx
+            elif direction in ['+y', '-y']:
+                A = dx * dz
+                d = dy
+            else:
+                A = dx * dy
+                d = dz
+
+            if out_of_bounds:
+                if direction in ['+x', '-x', '+y', '-y']:
+                    r = (1 / k_center) * (d / A)
+                    g = 1 / r
+                else:
+                    g = 0.0
+            else:
+                k_neighbor = get_k(iz_n)
+                r = 0.5 * (1 / k_center + 1 / k_neighbor) * (d / A)
+                g = 1 / r
+
+            conductance[direction] = g
+
+        return conductance
+
     def _initialize_heat_sources(self, padding = False):
         patch_size = int(0.005 / self.xy_resolution)  # 每个方向5mm，对应的格点数
         power_density_value = 3.56e10 # W/m³
@@ -118,70 +195,21 @@ class GeometryConfig:
      
         z, y, x = pos_meter
 
-        # 将物理坐标转为索引
         ix = int(np.floor(x / self.xy_resolution))
         iy = int(np.floor(y / self.xy_resolution))
         iz = int(np.floor(z / self.z_resolution))
 
-        # 辅助函数：判断某个索引点的热导率
-        def get_k(iz_index):
-            region = self.get_region_by_z(iz_index)
-            return 125 if region == 'heat_source' else 395  # W/(K·m)
+        if (
+            0 <= ix < self.nx and 0 <= iy < self.ny and 0 <= iz < self.nz_total
+        ):
+            values = self._conductance_table[iz, iy, ix]
+            return dict(zip(self._dir_order, values))
 
-        k_center = get_k(iz)
-
-        dx = self.xy_resolution
-        dy = self.xy_resolution
-        dz = self.z_resolution
-
-        conductance = {}
-
-        for direction, shift in {           #tianshu: random sampling?
-            '+x': (0, 0, +1),
-            '-x': (0, 0, -1),
-            '+y': (0, +1, 0),
-            '-y': (0, -1, 0),
-            '+z': (+1, 0, 0),
-            '-z': (-1, 0, 0),
-        }.items():
-            iz_n = iz + shift[0]
-            iy_n = iy + shift[1]
-            ix_n = ix + shift[2]
-
-            # 判断越界
-            out_of_bounds = (
-                ix_n < 0 or ix_n >= self.nx or
-                iy_n < 0 or iy_n >= self.ny or
-                iz_n < 0 or iz_n >= self.nz_total
-            )
-
-            # 判断方向维度，设定面积和长度
-            if direction in ['+x', '-x']:
-                A = dy * dz
-                d = dx
-            elif direction in ['+y', '-y']:
-                A = dx * dz
-                d = dy
-            else:  # +z, -z
-                A = dx * dy
-                d = dz
-
-            if out_of_bounds:
-                # 使用镜像边界近似：使用自身热导率计算对称导通  tianshu:??
-                if direction in ['+x', '-x', '+y', '-y']:
-                    r = (1 / k_center) * (d / A)
-                    g = 1 / r
-                else:
-                    g = 0.0  # z方向边界不允许越界
-            else:
-                k_neighbor = get_k(iz_n)
-                r = 0.5 * (1 / k_center + 1 / k_neighbor) * (d / A)
-                g = 1 / r
-
-            conductance[direction] = g
-
-        return conductance
+        # Fallback to on-the-fly computation for rare out-of-range points
+        g = self._compute_conductance_indices(iz, iy, ix)
+        return g
 
 
 if __name__=="__main__":
     geom = GeometryConfig()
+
