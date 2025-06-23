@@ -1,4 +1,5 @@
 import numpy as np
+from tqdm import tqdm
 
 class GeometryConfig:
     def __init__(self,
@@ -61,22 +62,23 @@ class GeometryConfig:
         self._initialize_heat_sources(padding = True)
 
         # === Pre-compute conductance for each grid point ===
-        self._precompute_conductance()
+        self.precompute = False
+        # self._precompute_conductance()
 
     def _precompute_conductance(self):
         """Pre-compute conductance for every grid point to accelerate ROG."""
 
         dirs = ['+x', '-x', '+y', '-y', '+z', '-z']
         self._conductance_table = np.zeros(
-            (self.nz_total, self.ny, self.nx, len(dirs)), dtype=float
+            (self.nz_heat+2, self.ny, self.nx, len(dirs)), dtype=float
         )
 
-        for iz in range(self.nz_total):
+        for iz in tqdm(range(self.z_virtual1[0],self.z_virtual2[1]+1)):
             for iy in range(self.ny):
                 for ix in range(self.nx):
                     g = self._compute_conductance_indices(iz, iy, ix)
-                    self._conductance_table[iz, iy, ix, :] = [g[d] for d in dirs]
-
+                    self._conductance_table[iz - self.z_virtual1[0], iy, ix, :] = [g[d] for d in dirs]
+        self.precompute = True
         self._dir_order = dirs
 
     def _compute_conductance_indices(self, iz, iy, ix):
@@ -200,9 +202,9 @@ class GeometryConfig:
         iz = int(np.floor(z / self.z_resolution))
 
         if (
-            0 <= ix < self.nx and 0 <= iy < self.ny and 0 <= iz < self.nz_total
+            self.precompute and 0 <= ix < self.nx and 0 <= iy < self.ny and self.z_virtual1[0] <= iz < self.z_virtual2[1]
         ):
-            values = self._conductance_table[iz, iy, ix]
+            values = self._conductance_table[iz - self.z_virtual1[0], iy, ix]
             return dict(zip(self._dir_order, values))
 
         # Fallback to on-the-fly computation for rare out-of-range points

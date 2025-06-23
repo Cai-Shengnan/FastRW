@@ -19,12 +19,18 @@ class RandomWalker:
         
         
 
-    def simulate_temperature(self, x0_meter, N=5000, num_workers=None):
-        args = [x0_meter] * N   
+    def simulate_temperature(self, x0_meter, N=5000, num_workers=None, print_interval=100):
+        args = [x0_meter] * N
         num_workers = num_workers or cpu_count()
+        results = []
+        
         with Pool(num_workers) as pool:
-            results = list(tqdm(pool.imap_unordered(self._simulate_single_path_wrapper, args), total=N))
-            
+            for i, res in enumerate(tqdm(pool.imap_unordered(self._simulate_single_path_wrapper, args), total=N)):
+                results.append(res)
+                if (i + 1) % print_interval == 0:
+                    current_mean = np.mean(results)
+                    print(f"[{i + 1}/{N}] Current Mean: {current_mean:.6f}")
+        
         return np.mean(results)
 
     def _simulate_single_path_wrapper(self, x0_meter):
