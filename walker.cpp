@@ -1,296 +1,331 @@
 #include "walker.h"
 #include <iostream>
-#include <numeric>  // for std::accumulate
-#include <cmath>    // for std::floor, std::exp, std::sqrt
+#include <random>
+#include <thread>
+#include <numeric>
+#include <cmath>
+#include <cassert>
+#include <atomic>
 
+// Thread-local random number generator (Mersenne Twister) seeded with a random device
+static thread_local std::mt19937 rng((std::random_device())());
 
-// Initialize thread-local random engine with non-deterministic seed
-thread_local std::mt19937 RandomWalker::rng( std::random_device{}() );
-
-RandomWalker::RandomWalker(GeometryConfig* geometry_config,
-                           size_t max_steps_val,
-                           double eps_val,
-                           double delta_x_val)
-    : geom(geometry_config), max_steps(max_steps_val), eps(eps_val), delta_x(delta_x_val) {}
-
-    double RandomWalker::simulate_temperature(const std::array<double,3>& x0_meter,
-        size_t N, size_t num_workers, size_t print_interval) {
-        std::vector<double> results(N);
-        size_t print_step = std::max(size_t(1), print_interval);
-
-        // Set the number of threads (optional; default is usually all cores)
-        if (num_workers > 0)
-        omp_set_num_threads(num_workers);
-
-        // Parallel for loop with OpenMP
-        #pragma omp parallel for
-        for (size_t i = 0; i < N; ++i) {
-        // Create a thread-local walker (if your walker is not thread safe)
-        // Otherwise, if simulate_single_path is thread safe, just call it.
-        results[i] = simulate_single_path(x0_meter);
-        }
-
-        // Optionally print progress (after the loop)
-        for (size_t i = print_step; i <= N; i += print_step) {
-        double current_mean = std::accumulate(results.begin(), results.begin() + i, 0.0) / i;
-        std::cout << "[" << i << "/" << N << "] Current Mean: "
-        << current_mean << std::endl;
-        }
-
-        double total_sum = std::accumulate(results.begin(), results.end(), 0.0);
-        return results.empty() ? 0.0 : total_sum / results.size();
+// RandomWalker constructor
+RandomWalker::RandomWalker(GeometryConfig& geometry_config, double max_steps_, double eps_, double delta_x_)
+: geom(geometry_config), max_steps(max_steps_), eps(eps_), delta_x(delta_x_) {
+    // No additional initialization needed
 }
 
-double RandomWalker::simulate_single_path(const std::array<double,3>& x0_meter) {
-    std::array<double,3> pos = x0_meter;
-    // T_i accumulators: [heat_source, Dirichlet, Neumann, Robin] contributions
+double RandomWalker::simulate_temperature(const Position& x0_meter, int N, int num_workers, int print_interval) {
+    if(N <= 0) {
+        return 0.0;
+    }
+    // Determine number of threads to use
+    int workers = (num_workers <= 0 ? static_cast<int>(std::thread::hardware_concurrency()) : num_workers);
+    if(workers < 1) workers = 1;
+    if(workers == 1) {
+        // Single-threaded simulation with progress output
+        double sum = 0.0;
+        for(int i = 0; i < N; ++i) {
+            // Simulate one path
+            double value = simulate_single_path(x0_meter).first;
+            sum += value;
+            if((i + 1) % print_interval == 0) {
+                double current_mean = sum / (i + 1);
+                std::cout.setf(std::ios::fixed);
+                std::cout.precision(6);
+                std::cout << "[" << (i + 1) << "/" << N << "] Current Mean: " << current_mean << std::endl;
+            }
+        }
+        return sum / N;
+    } else {
+        // Multi-threaded simulation
+        int tasks_per_thread = N / workers;
+        int remainder = N % workers;
+        std::vector<double> partial_sums(workers, 0.0);
+        std::vector<std::thread> threads;
+        threads.reserve(workers);
+        // Launch threads to perform simulations in parallel
+        for(int t = 0; t < workers; ++t) {
+            int count = tasks_per_thread + (t < remainder ? 1 : 0);
+            threads.emplace_back([&, t, count]() {
+                double local_sum = 0.0;
+                // Each thread uses its own thread-local RNG
+                for(int j = 0; j < count; ++j) {
+                    double value = simulate_single_path(x0_meter).first;
+                    local_sum += value;
+                }
+                partial_sums[t] = local_sum;
+            });
+        }
+        // Join threads
+        for(auto& th : threads) {
+            if(th.joinable()) {
+                th.join();
+            }
+        }
+        // Aggregate results from all threads
+        double total_sum = std::accumulate(partial_sums.begin(), partial_sums.end(), 0.0);
+        return total_sum / N;
+    }
+}
+
+std::pair<double, std::string> RandomWalker::simulate_single_path(const Position& x0_meter) {
+    Position pos = x0_meter;
     double T_i[4] = {0.0, 0.0, 0.0, 0.0};
     double e_hat = 1.0;
-    bool in_robin = false;
     int near_robin = 0;
     int hit_robin = 0;
+    bool in_robin = false;
     double robin_parameter = 0.0;
-    size_t step_count = 0;
-    // Random walk simulation loop
-    while (step_count < max_steps && e_hat > eps) {
-        std::string region = geom->get_region_by_coord(pos[0]);
-        auto [bc_pos, bc_type, bc_param] = geom->is_near_boundary(pos);
-        if (bc_pos.empty()) {
-            // Not near Dirichlet/Neumann/Robin boundary
-            if (region == "heat_source" || region == "virtual_top" || region == "virtual_bottom") {
-                // Within a heat source region or virtual extension region
+    int step_count = 0;
+    std::string end_boundary;  // will hold "top", "bottom", or empty
+    std::string bc_pos;
+    GeometryConfig::BoundaryType bc_type;
+    double bc_param;
+    while(step_count < max_steps) {
+        std::string region = geom.get_region_by_coord(pos[0]);
+        bool isNear = geom.is_near_boundary(pos, bc_pos, bc_type, bc_param);
+        if(!isNear) {
+            if(region == "heat_source" || region == "virtual_top" || region == "virtual_bottom") {
                 double reward = (region == "heat_source") ? get_heat_reward(pos) : 0.0;
                 T_i[0] += e_hat * reward;
-                pos = step_wog(pos);  // take a grid step
+                pos = step_wog(pos);
             } else {
-                // In non-source region (top or bottom bulk region)
-                if (in_robin) {
-                    // If previously in a Robin boundary scenario, finalize it upon leaving
-                    auto [subT3, new_e_hat] = escape_robin(e_hat, hit_robin, near_robin, robin_parameter);
-                    T_i[3] += subT3;
-                    e_hat = new_e_hat;
-                    in_robin = false;
+                if(in_robin) {
+                    auto result = escape_robin(e_hat, hit_robin, near_robin, robin_parameter);
+                    double sub_T3 = result.first;
+                    e_hat = result.second;
+                    T_i[3] += sub_T3;
                     near_robin = 0;
                     hit_robin = 0;
+                    in_robin = false;
                     robin_parameter = 0.0;
                 }
-                pos = step_wos(pos).first;  // Walk on Spheres step in bulk region
+                pos = step_wos(pos).first;
             }
         } else {
-            // Near an actual boundary (top or bottom)
-            if (bc_type == "Dirichlet") {
-                // Hit a Dirichlet (fixed temperature) boundary
+            if(bc_type == GeometryConfig::BoundaryType::Dirichlet) {
                 double phi = bc_param;
                 T_i[1] += e_hat * phi;
-                break;  // terminate this path (absorbed)
+                end_boundary = bc_pos;
+                break;
             } else {
-                // Neumann or Robin boundary handling
                 bool is_top = (bc_pos == "top");
-                bool is_bottom = (bc_pos == "bottom");
-                // Determine if extremely close to boundary (within Δx)
-                bool is_very_close = false;
-                if (is_top && pos[0] >= geom->nz_total * geom->z_resolution - delta_x) {
-                    is_very_close = true;
-                } else if (is_bottom && pos[0] <= delta_x) {
-                    is_very_close = true;
+                bool is_very_close;
+                if(is_top) {
+                    is_very_close = (pos[0] >= geom.nz_total * geom.z_resolution - delta_x);
+                } else {
+                    is_very_close = (pos[0] <= delta_x);
                 }
                 double step_length = is_very_close ? (2 * delta_x) : delta_x;
-                if (bc_type == "Neumann") {
-                    // Accumulate Neumann boundary contribution
+                if(bc_type == GeometryConfig::BoundaryType::Neumann) {
                     double dL = estimate_local_time_increment(bc_type);
                     double phi = bc_param;
                     T_i[2] += e_hat * phi * dL;
                     pos = step_wos(pos, step_length).first;
-                } else if (bc_type == "Robin") {
-                    // Enter or remain in Robin boundary interaction mode
-                    if (!in_robin) {
+                } else if(bc_type == GeometryConfig::BoundaryType::Robin) {
+                    if(!in_robin) {
+                        assert(near_robin == 0 && hit_robin == 0);
                         in_robin = true;
                         robin_parameter = bc_param;
                     }
-                    near_robin += 1;
-                    bool hit_boundary;
-                    std::tie(pos, hit_boundary) = step_wos(pos, step_length);
-                    if (hit_boundary) {
+                    if(is_very_close){
+                        near_robin += 4;
+                    } else{
+                        near_robin += 1;
+                    }
+            
+                    bool boundary_hit;
+                    std::tie(pos, boundary_hit) = step_wos(pos, step_length);
+                    if(boundary_hit) {
                         hit_robin += 1;
                     }
                 }
             }
         }
-        ++step_count;
+        step_count++;
     }
-    // If path ended while still in Robin mode, finalize the Robin contributions
-    if (in_robin) {
-        auto [subT3, new_e_hat] = escape_robin(e_hat, hit_robin, near_robin, robin_parameter);
-        T_i[3] += subT3;
-        e_hat = new_e_hat;
+    if(in_robin) {
+        auto result = escape_robin(e_hat, hit_robin, near_robin, robin_parameter);
+        T_i[3] += result.first;
+        e_hat = result.second;
     }
-    return T_i[0] + T_i[1] + T_i[2] + T_i[3];
+    double total_T = T_i[0] + T_i[1] + T_i[2] + T_i[3];
+    return { total_T, end_boundary };
 }
 
-std::pair<double,double> RandomWalker::escape_robin(double e_hat, int hit_robin, int near_robin, double robin_parameter) {
-    // Finalize contributions after leaving a Robin boundary region
+// Optionally reseed RNG and call simulate_single_path (for use in parallel loops)
+std::pair<double, std::string> RandomWalker::simulate_single_path_wrapper(const Position& x0_meter) {
+    rng.seed(std::random_device()());  // new random seed for this execution
+    return simulate_single_path(x0_meter);
+}
+
+std::pair<double, double> RandomWalker::escape_robin(double e_hat, int hit_robin, int near_robin, double robin_param) {
     double sub_T3 = 0.0;
-    double h = robin_parameter;
+    double h = robin_param;
     double k = 395.0;
     double c = -h / k;
-    double phi = -c * geom->T_am;
-    if (hit_robin > 0) {
-        double avg_steps_per_hit = static_cast<double>(near_robin) / hit_robin;
-        for (int i = 0; i < hit_robin; ++i) {
-            double dL = estimate_local_time_increment("Robin") * avg_steps_per_hit;
+    double phi = -c * geom.T_am;
+    if(hit_robin == 0) {
+        // No Robin boundary hits, no contribution
+    } else {
+        // Average steps per boundary hit in Robin region
+        double avg_step_per_hit = (hit_robin > 0) ? (static_cast<double>(near_robin) / hit_robin) : 0.0;
+        for(int i = 0; i < hit_robin; ++i) {
+            double dL = estimate_local_time_increment(GeometryConfig::BoundaryType::Robin) * avg_step_per_hit;
             e_hat *= std::exp(c * dL);
             sub_T3 += e_hat * phi * dL;
         }
     }
-    // Return the accumulated contribution and the updated e_hat
     return { sub_T3, e_hat };
 }
 
-double RandomWalker::get_heat_reward(const std::array<double,3>& pos) {
-    // Compute heat source reward at the current position
-    double z = pos[0], y = pos[1], x = pos[2];
-    int iz = static_cast<int>(std::floor(z / geom->z_resolution)) - geom->z_heat_start;
-    int iy = static_cast<int>(std::floor(y / geom->xy_resolution));
-    int ix = static_cast<int>(std::floor(x / geom->xy_resolution));
-    if (iz >= 0 && iz < geom->nz_heat && iy >= 0 && iy <= geom->ny && ix >= 0 && ix <= geom->nx) {
-        double total_g = get_gt(pos);
-        // Index into the power_density array (which is padded in Y and X dimensions)
-        size_t idx = (static_cast<size_t>(iz) * geom->power_dim_y + iy) * geom->power_dim_x + ix;
-        double p = geom->power_density[idx];
-        return (total_g > 0.0 ? p / total_g : 0.0);
+double RandomWalker::get_heat_reward(const Position& pos) {
+    double z = pos[0];
+    double y = pos[1];
+    double x = pos[2];
+    // Compute indices relative to heat source grid
+    int iz = static_cast<int>(std::floor(z / geom.z_resolution)) - geom.z_heat.first;
+    int iy = static_cast<int>(std::floor(y / geom.xy_resolution));
+    int ix = static_cast<int>(std::floor(x / geom.xy_resolution));
+    if(iz >= 0 && iz < geom.nz_heat && iy >= 0 && iy <= geom.ny && ix >= 0 && ix <= geom.nx) {
+        // Position is inside the heat source region bounds
+        double power = geom.power_density[iz][iy][ix];
+        double gt_val = get_gt(pos);
+        if(gt_val > 0) {
+            return power / gt_val;
+        }
     }
     return 0.0;
 }
 
-double RandomWalker::get_gt(const std::array<double,3>& pos) {
-    // Sum of conductances in all 6 directions at this position
-    std::array<double,6> conductances = geom->get_conductance(pos);
-    double sum = 0.0;
-    for (double g : conductances) {
-        sum += g;
+double RandomWalker::get_gt(const Position& pos) {
+    std::array<double,6> cond = geom.get_conductance(pos);
+    double total = 0.0;
+    for(double g : cond) {
+        total += g;
     }
-    return sum;
+    return total;
 }
 
-double RandomWalker::estimate_local_time_increment(const std::string& bc_type) {
-    // Compute Δt (local time increment) for boundary type using delta_x and epsilon (diffusion properties)
-    double epsilon = geom->boundary_epsilon.at(bc_type);
-    double d = delta_x;
-    return (d * d) / (6.0 * epsilon);
+double RandomWalker::estimate_local_time_increment(GeometryConfig::BoundaryType bc_type) {
+    // The epsilon (diffusion parameter) for this boundary type
+    double epsilon = geom.boundary_epsilon[static_cast<int>(bc_type)];
+    double delta = delta_x;
+    // Formula: Δt = δ^2 / (6 * epsilon)
+    return (delta * delta) / (6.0 * epsilon);
 }
 
-std::pair<std::array<double,3>, bool> RandomWalker::step_wos(const std::array<double,3>& pos, double radius) {
-    // Walk-on-Spheres (WOS) step from position `pos` with given radius (or compute radius if -1)
+std::pair<Position, bool> RandomWalker::step_wos(const Position& pos, double radius) {
     double z = pos[0];
-    std::string region = geom->get_region_by_coord(z);
-    if (region != "top" && region != "bottom") {
-        throw std::runtime_error("step_wos called outside top/bottom region");
-    }
-    // Determine jump radius
-    if (radius < 0.0) {  
-        // Calculate radius to nearest boundary (either domain boundary or edge of heat source region)
-        if (region == "top") {
-            double z_upper = (geom->z_top_end + 1) * geom->z_resolution;
-            double dist_to_heat_bottom = z - (geom->z_heat_end + 1) * geom->z_resolution;
+    // Determine current region to choose sphere radius if not provided
+    std::string region = geom.get_region_by_coord(z);
+    double r;
+    if(radius < 0) {
+        // No radius given: compute based on distance to nearest region boundary
+        if(region == "top") {
+            double z_upper = (geom.z_top.second + 1) * geom.z_resolution;
+            double dist_to_heat_top = z - (geom.z_heat.second + 1) * geom.z_resolution;
             double dist_to_top_boundary = z_upper - z;
-            radius = std::min(dist_to_heat_bottom, dist_to_top_boundary);
-        } else { // region == "bottom"
-            double z_lower = geom->z_bottom_start * geom->z_resolution;
-            double dist_to_heat_top = geom->z_heat_start * geom->z_resolution - z;
+            r = std::min(dist_to_heat_top, dist_to_top_boundary);
+        } else {
+            // region == "bottom"
+            double z_lower = geom.z_bottom.first * geom.z_resolution;
+            double dist_to_heat_bottom = geom.z_heat.first * geom.z_resolution - z;
             double dist_to_bottom_boundary = z - z_lower;
-            radius = std::min(dist_to_heat_top, dist_to_bottom_boundary);
+            r = std::min(dist_to_heat_bottom, dist_to_bottom_boundary);
         }
+    } else {
+        // Use the specified radius (for near-boundary steps)
+        r = radius;
     }
-    // Sample a random direction uniformly on the surface of a sphere:contentReference[oaicite:2]{index=2}
-    static thread_local std::normal_distribution<double> normal_dist(0.0, 1.0);
-    double a = normal_dist(rng);
-    double b = normal_dist(rng);
-    double c = normal_dist(rng);
-    double norm = std::sqrt(a*a + b*b + c*c);
-    if (norm < 1e-16) norm = 1e-16;
-    std::array<double,3> unit_vec = { a / norm, b / norm, c / norm };
-    // Compute the new position after the jump
-    std::array<double,3> new_pos = { pos[0] + radius * unit_vec[0],
-                                     pos[1] + radius * unit_vec[1],
-                                     pos[2] + radius * unit_vec[2] };
-    // Reflect the new position if it goes out of domain bounds
+    // Sample a random direction on the surface of a sphere of radius r
+    std::normal_distribution<double> normal_dist(0.0, 1.0);
+    double vx = normal_dist(rng);
+    double vy = normal_dist(rng);
+    double vz = normal_dist(rng);
+    // Normalize the vector
+    double norm = std::sqrt(vx*vx + vy*vy + vz*vz);
+    vx /= norm;
+    vy /= norm;
+    vz /= norm;
+    // Compute new position
+    Position new_pos = { pos[0] + r * vz, pos[1] + r * vy, pos[2] + r * vx };
+    // Reflect if out of bounds
     bool hit_boundary;
     std::tie(new_pos, hit_boundary) = reflect(new_pos);
-    // If landed in a virtual layer (just outside the real domain), snap to nearest grid point
-    std::string new_region = geom->get_region_by_coord(new_pos[0]);
-    if (new_region == "virtual_top" || new_region == "virtual_bottom") {
-        int z_idx = static_cast<int>(std::floor(new_pos[0] / geom->z_resolution));
-        int y_idx = static_cast<int>(std::floor(new_pos[1] / geom->xy_resolution));
-        int x_idx = static_cast<int>(std::floor(new_pos[2] / geom->xy_resolution));
-        std::array<double,3> snapped_pos = {
-            z_idx * geom->z_resolution,
-            y_idx * geom->xy_resolution,
-            x_idx * geom->xy_resolution
-        };
-        return { snapped_pos, hit_boundary };
+    // If landed in a virtual layer, snap to grid center
+    std::string new_region = geom.get_region_by_coord(new_pos[0]);
+    if(new_region == "virtual_top" || new_region == "virtual_bottom") {
+        int z_idx = static_cast<int>(std::floor(new_pos[0] / geom.z_resolution));
+        int y_idx = static_cast<int>(std::floor(new_pos[1] / geom.xy_resolution));
+        int x_idx = static_cast<int>(std::floor(new_pos[2] / geom.xy_resolution));
+        double z_snap = z_idx * geom.z_resolution + geom.z_resolution / 2.0;
+        double y_snap = y_idx * geom.xy_resolution + geom.xy_resolution / 2.0;
+        double x_snap = x_idx * geom.xy_resolution + geom.xy_resolution / 2.0;
+        return { {z_snap, y_snap, x_snap}, hit_boundary };
     }
     return { new_pos, hit_boundary };
 }
 
-std::array<double,3> RandomWalker::step_wog(const std::array<double,3>& pos) {
-    // Walk-on-Grid (WOG) step: choose a neighbor direction with probability proportional to conductance
-    std::array<double,6> g_vals = geom->get_conductance(pos);
+Position RandomWalker::step_wog(const Position& pos) {
+    // Get conductance values in all six directions
+    std::array<double, 6> g = geom.get_conductance(pos);
     double total_g = 0.0;
-    for (double g : g_vals) {
-        total_g += g;
+    for(double val : g) total_g += val;
+    if(total_g <= 0.0) {
+        // No conductance (should not happen in valid domain) – stay at current position
+        return pos;
     }
-    if (total_g <= 0.0) {
-        return pos; // no movement if no conductance (should not happen under normal conditions)
-    }
-    // Generate a uniform random number and pick a direction weighted by conductances:contentReference[oaicite:3]{index=3}
-    static thread_local std::uniform_real_distribution<double> uniform_dist(0.0, 1.0);
-    double r = uniform_dist(rng) * total_g;
-    double cumulative = 0.0;
-    int chosen_index = 0;
-    for (int i = 0; i < 6; ++i) {
-        cumulative += g_vals[i];
-        if (r <= cumulative) {
-            chosen_index = i;
-            break;
-        }
-    }
-    // Direction vectors (parallel to axes) corresponding to indices: +x, -x, +y, -y, +z, -z
-    std::array<std::array<double,3>,6> directions = {{
-        { 0.0, 0.0,  geom->xy_resolution },   // +x
-        { 0.0, 0.0, -geom->xy_resolution },   // -x
-        { 0.0,  geom->xy_resolution, 0.0 },   // +y
-        { 0.0, -geom->xy_resolution, 0.0 },   // -y
-        {  geom->z_resolution, 0.0, 0.0 },    // +z
-        { -geom->z_resolution, 0.0, 0.0 }     // -z
-    }};
-    std::array<double,3> new_pos = {
-        pos[0] + directions[chosen_index][0],
-        pos[1] + directions[chosen_index][1],
-        pos[2] + directions[chosen_index][2]
+    // Direction vectors for moves: +x, -x, +y, -y, +z, -z
+    Position directions[6] = {
+        {0.0, 0.0, geom.xy_resolution},   // +x
+        {0.0, 0.0, -geom.xy_resolution},  // -x
+        {0.0, geom.xy_resolution, 0.0},   // +y
+        {0.0, -geom.xy_resolution, 0.0},  // -y
+        {geom.z_resolution, 0.0, 0.0},    // +z
+        {-geom.z_resolution, 0.0, 0.0}    // -z
     };
-    // Reflect if the step goes out of lateral bounds (X or Y)
-    auto [reflected_pos, hit] = reflect(new_pos);
-    (void)hit;  // hit flag (top/bottom boundary) is not relevant here
-    return reflected_pos;
+    // Choose a direction index according to conductance weights
+    std::discrete_distribution<int> dist(g.begin(), g.end());
+    int choice = dist(rng);
+    Position direction_vector = directions[choice];
+    Position new_pos = { pos[0] + direction_vector[0], pos[1] + direction_vector[1], pos[2] + direction_vector[2] };
+    // Reflect if the step goes out of lateral bounds (x or y)
+    double new_x = new_pos[2];
+    double new_y = new_pos[1];
+    if(new_x < 0.0 || new_x > geom.x_size || new_y < 0.0 || new_y > geom.y_size) {
+        return reflect(new_pos).first;
+    }
+    return new_pos;
 }
 
-std::pair<std::array<double,3>, bool> RandomWalker::reflect(const std::array<double,3>& pos) {
-    // Reflect a position back into the domain if it goes out of bounds.
-    std::array<double,3> rpos = pos;
+std::pair<Position, bool> RandomWalker::reflect(const Position& pos) {
     bool hit_boundary = false;
-    double x_max = geom->nx * geom->xy_resolution;
-    double y_max = geom->ny * geom->xy_resolution;
-    double z_max = geom->nz_total * geom->z_resolution;
-    // Check and clamp Z (vertical) coordinate
-    if (rpos[0] < 0.0 || rpos[0] > z_max) {
+    double z = pos[0];
+    double y = pos[1];
+    double x = pos[2];
+    double x_max = geom.nx * geom.xy_resolution;
+    double y_max = geom.ny * geom.xy_resolution;
+    double z_max = geom.nz_total * geom.z_resolution;
+    // Reflect z if out of [0, z_max]
+    if(z < 0.0 || z > z_max) {
         hit_boundary = true;
     }
-    if (rpos[0] < 0.0) rpos[0] = 0.0;
-    if (rpos[0] > z_max) rpos[0] = z_max;
-    // Reflect X and Y coordinates if outside [0, x_max] or [0, y_max]
-    if (rpos[2] < 0.0) rpos[2] = -rpos[2];
-    if (rpos[2] > x_max) rpos[2] = 2 * x_max - rpos[2];
-    if (rpos[1] < 0.0) rpos[1] = -rpos[1];
-    if (rpos[1] > y_max) rpos[1] = 2 * y_max - rpos[1];
-    return { rpos, hit_boundary };
+    if(z < 0.0) z = 0.0;
+    if(z > z_max) z = z_max;
+    // Reflect x if out of [0, x_max]
+    if(x < 0.0) {
+        x = -x;
+    } else if(x > x_max) {
+        x = 2 * x_max - x;
+    }
+    // Reflect y if out of [0, y_max]
+    if(y < 0.0) {
+        y = -y;
+    } else if(y > y_max) {
+        y = 2 * y_max - y;
+    }
+    return { {z, y, x}, hit_boundary };
 }

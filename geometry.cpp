@@ -1,239 +1,293 @@
 #include "geometry.h"
-#include <algorithm>  // for std::min and std::max
-#include <tuple>
 
-GeometryConfig::GeometryConfig(double x_size_val, double y_size_val,
-                               double bottom_thickness_val,
-                               double heat_source_thickness_val,
-                               double top_thickness_val,
-                               double xy_resolution_val,
-                               double z_resolution_val,
-                               std::pair<std::string,std::string> z_boundary_types_val,
-                               std::pair<double,double> z_boundary_params_val,
-                               std::string lateral_boundary_type_val,
-                               double lateral_boundary_param_val,
-                               std::unordered_map<std::string,double> boundary_epsilon_val)
+using std::vector;
+using std::array;
+using std::string;
+using std::pair;
+using BT = GeometryConfig::BoundaryType;
+
+GeometryConfig::GeometryConfig(double x_size_, double y_size_,
+                               double bottom_thickness_, double heat_source_thickness_,
+                               double top_thickness_, double xy_resolution_,
+                               double z_resolution_,
+                               BoundaryType top_boundary_type_,
+                               BoundaryType bottom_boundary_type_,
+                               double top_boundary_param_,
+                               double bottom_boundary_param_,
+                               BoundaryType lateral_boundary_type_,
+                               double lateral_boundary_param_,
+                               double eps_dirichlet,
+                               double eps_neumann,
+                               double eps_robin)
+: T_am(20.0),
+  x_size(x_size_), y_size(y_size_),
+  bottom_thickness(bottom_thickness_ - z_resolution_), 
+  heat_source_thickness(heat_source_thickness_),
+  top_thickness(top_thickness_ - z_resolution_),
+  virtual_layer_thickness(z_resolution_),
+  xy_resolution(xy_resolution_), z_resolution(z_resolution_),
+  top_boundary_type(top_boundary_type_),
+  bottom_boundary_type(bottom_boundary_type_),
+  lateral_boundary_type(lateral_boundary_type_),
+  top_boundary_param(top_boundary_param_),
+  bottom_boundary_param(bottom_boundary_param_),
+  lateral_boundary_param(lateral_boundary_param_),
+  boundary_epsilon{eps_dirichlet, eps_neumann, eps_robin},
+  precompute(false)
 {
-    // Assign geometry parameters
-    T_am = 20.0;
-    x_size = x_size_val;
-    y_size = y_size_val;
-    xy_resolution = xy_resolution_val;
-    z_resolution = z_resolution_val;
-    // Adjust bottom and top thickness by subtracting one z-resolution (matching Python logic)
-    bottom_thickness = bottom_thickness_val - z_resolution;
-    heat_source_thickness = heat_source_thickness_val;
-    top_thickness = top_thickness_val - z_resolution;
-    virtual_layer_thickness = z_resolution;
-    // Calculate grid cell counts in each dimension
-    nx = static_cast<int>(x_size / xy_resolution);
-    ny = static_cast<int>(y_size / xy_resolution);
-    nz_bottom   = static_cast<int>(bottom_thickness / z_resolution);
-    nz_heat     = static_cast<int>(heat_source_thickness / z_resolution);
-    nz_top      = static_cast<int>(top_thickness / z_resolution);
-    nz_virtual  = static_cast<int>(virtual_layer_thickness / z_resolution);
-    nz_total    = nz_bottom + 2 * nz_virtual + nz_heat + nz_top;
-    // Define index ranges for each region (inclusive indices)
-    z_bottom_start  = 0;
-    z_bottom_end    = nz_bottom - 1;
-    z_virtual1_start = z_bottom_end + 1;
-    z_virtual1_end   = z_bottom_end + nz_virtual;
-    z_heat_start    = z_virtual1_end + 1;
-    z_heat_end      = z_virtual1_end + nz_heat;
-    z_virtual2_start = z_heat_end + 1;
-    z_virtual2_end   = z_heat_end + nz_virtual;
-    z_top_start     = z_virtual2_end + 1;
-    z_top_end       = nz_total - 1;
-    // Boundary condition types and parameters
-    top_boundary_type = z_boundary_types_val.first;
-    bottom_boundary_type = z_boundary_types_val.second;
-    top_boundary_param = z_boundary_params_val.first;
-    bottom_boundary_param = z_boundary_params_val.second;
-    lateral_boundary_type = lateral_boundary_type_val;
-    lateral_boundary_param = lateral_boundary_param_val;
-    boundary_epsilon = boundary_epsilon_val;
-    // Initialize the power density array (with heat sources)
+    // === Compute grid dimensions ===
+    nx = static_cast<int>(std::round(x_size / xy_resolution));
+    ny = static_cast<int>(std::round(y_size / xy_resolution));
+    nz_bottom = static_cast<int>(std::round(bottom_thickness / z_resolution));
+    nz_heat   = static_cast<int>(std::round(heat_source_thickness / z_resolution));
+    nz_top    = static_cast<int>(std::round(top_thickness / z_resolution));
+    nz_virtual = static_cast<int>(std::round(virtual_layer_thickness / z_resolution));
+    nz_total  = nz_bottom + 2 * nz_virtual + nz_heat + nz_top;
+    // === Define z-index ranges for each region ===
+    z_bottom    = {0, nz_bottom - 1};
+    z_virtual1  = {z_bottom.second + 1, z_bottom.second + nz_virtual};
+    z_heat      = {z_virtual1.second + 1, z_virtual1.second + nz_heat};
+    z_virtual2  = {z_heat.second + 1, z_heat.second + nz_virtual};
+    z_top       = {z_virtual2.second + 1, nz_total - 1};
+    // Initialize the power density array and heat sources
     initialize_heat_sources(true);
-    precompute = false;
-}
-
-// Helper: determine thermal conductivity `k` at a given z-index (based on region)
-inline double GeometryConfig::material_conductivity(int z_index) const {
-    std::string region = get_region_by_z(z_index);
-    return (region == "heat_source") ? 125.0 : 395.0;
+    // (Optional) Precompute conductance table is off by default (precompute remains false)
+    // === Print configuration summary ===
+    std::cout << "[GeometryConfig] Initialization Summary:\n";
+    std::cout << "  x_size = " << x_size << " m, y_size = " << y_size << " m\n";
+    std::cout << "  bottom_thickness = " << bottom_thickness << " m\n";
+    std::cout << "  heat_source_thickness = " << heat_source_thickness << " m\n";
+    std::cout << "  top_thickness = " << top_thickness << " m\n";
+    std::cout << "  virtual_layer_thickness = " << virtual_layer_thickness << " m\n";
+    std::cout << "  xy_resolution = " << xy_resolution << " m, z_resolution = " << z_resolution << " m\n";
+    std::cout << "  Grid size (nx, ny, nz_total): (" << nx << ", " << ny << ", " << nz_total << ")\n";
+    std::cout << "  Z region indices:\n";
+    std::cout << "    bottom: (" << z_bottom.first << ", " << z_bottom.second << ")\n";
+    std::cout << "    virtual1: (" << z_virtual1.first << ", " << z_virtual1.second << ")\n";
+    std::cout << "    heat: (" << z_heat.first << ", " << z_heat.second << ")\n";
+    std::cout << "    virtual2: (" << z_virtual2.first << ", " << z_virtual2.second << ")\n";
+    std::cout << "    top: (" << z_top.first << ", " << z_top.second << ")\n";
+    std::cout << "  Z boundary types: { top: ";
+    // Print boundary types as strings for top and bottom
+    string top_type_str = (top_boundary_type == BT::Dirichlet ? "Dirichlet" 
+                          : (top_boundary_type == BT::Neumann ? "Neumann" : "Robin"));
+    string bottom_type_str = (bottom_boundary_type == BT::Dirichlet ? "Dirichlet" 
+                             : (bottom_boundary_type == BT::Neumann ? "Neumann" : "Robin"));
+    std::cout << top_type_str << ", bottom: " << bottom_type_str << " }\n";
+    std::cout << "  Z boundary params: { top: " << top_boundary_param 
+              << ", bottom: " << bottom_boundary_param << " }\n";
+    std::cout << "  Lateral boundary type: " 
+              << (lateral_boundary_type == BT::Dirichlet ? "Dirichlet" 
+                  : (lateral_boundary_type == BT::Neumann ? "Neumann" : "Robin"))
+              << "\n";
+    std::cout << "  Lateral boundary params: " << lateral_boundary_param << "\n";
+    std::cout << "  Boundary epsilons: { Dirichlet: " << boundary_epsilon[0]
+              << ", Neumann: " << boundary_epsilon[1] << ", Robin: " << boundary_epsilon[2] << " }\n";
+    std::cout << "  Power density shape: (" << nz_heat << ", " << (ny+1) << ", " << (nx+1) << ")\n\n";
 }
 
 void GeometryConfig::initialize_heat_sources(bool padding) {
-    // Set up power_density array dimensions
-    power_dim_z = nz_heat;
-    int base_ny = ny;
-    int base_nx = nx;
-    int alloc_y = base_ny;
-    int alloc_x = base_nx;
-    if (padding) {
-        alloc_y = base_ny + 1;
-        alloc_x = base_nx + 1;
+    // Determine array dimensions (add one extra row/col if padding enabled)
+    int ny_size = ny + (padding ? 1 : 0);
+    int nx_size = nx + (padding ? 1 : 0);
+    power_density.resize(nz_heat);
+    for(int iz = 0; iz < nz_heat; ++iz) {
+        power_density[iz].assign(ny_size, vector<double>(nx_size, 0.0));
     }
-    power_dim_y = alloc_y;
-    power_dim_x = alloc_x;
-    power_density.assign(nz_heat * power_dim_y * power_dim_x, 0.0);
-    // Define a square heat patch of 5 mm x 5 mm in the heat source layer
-    int patch_size = static_cast<int>(0.005 / xy_resolution);
-    double power_density_value = 0;  // W/m³ (power density)
-    // Compute starting indices for two patches (at 25% and 75% positions in X and Y)
-    int x_start1 = static_cast<int>(0.25 * base_nx - patch_size / 2.0);
-    int x_start2 = static_cast<int>(0.75 * base_nx - patch_size / 2.0);
-    int y_start1 = static_cast<int>(0.25 * base_ny - patch_size / 2.0);
-    int y_start2 = static_cast<int>(0.75 * base_ny - patch_size / 2.0);
-    std::vector<int> x_starts = {x_start1, x_start2};
-    std::vector<int> y_starts = {y_start1, y_start2};
-    double cell_volume = xy_resolution * xy_resolution * z_resolution;
-    // Fill the patch areas in all heat source layers
-    for (int z = 0; z < nz_heat; ++z) {
-        for (int y0 : y_starts) {
-            if (y0 < 0 || y0 + patch_size > base_ny) continue;
-            for (int x0 : x_starts) {
-                if (x0 < 0 || x0 + patch_size > base_nx) continue;
-                for (int yy = y0; yy < y0 + patch_size; ++yy) {
-                    for (int xx = x0; xx < x0 + patch_size; ++xx) {
-                        // Compute linear index and assign power density (W per cell)
-                        size_t index = (static_cast<size_t>(z) * power_dim_y + yy) * power_dim_x + xx;
-                        power_density[index] = power_density_value * cell_volume;
+
+    // Determine patch size for heat sources (5 mm in each lateral direction)
+    int patch_size = static_cast<int>(std::lround(0.005 / xy_resolution));
+    double power_density_value = 3.56e10; // W/m³ volumetric heat generation
+    // Calculate starting indices for two patches at 25% and 75% positions in x and y
+    int x_start1 = static_cast<int>(std::lround(0.25 * nx - patch_size / 2.0));
+    int x_start2 = static_cast<int>(std::lround(0.75 * nx - patch_size / 2.0));
+    int y_start1 = static_cast<int>(std::lround(0.25 * ny - patch_size / 2.0));
+    int y_start2 = static_cast<int>(std::lround(0.75 * ny - patch_size / 2.0));
+    vector<int> x_starts = {x_start1, x_start2};
+    vector<int> y_starts = {y_start1, y_start2};
+    std::cout << "x_starts, y_starts, patch_size: [" << x_start1 << ", " << x_start2 
+              << "], [" << y_start1 << ", " << y_start2 << "], " << patch_size << "\n";
+    // Fill the defined square patches in the heat source region
+    for(int iy0 : y_starts) {
+        for(int ix0 : x_starts) {
+            for(int iz = 0; iz < nz_heat; ++iz) {
+                int iy_end = std::min(ny, iy0 + patch_size);
+                int ix_end = std::min(nx, ix0 + patch_size);
+                for(int iy = iy0; iy < iy_end; ++iy) {
+                    for(int ix = ix0; ix < ix_end; ++ix) {
+                        power_density[iz][iy][ix] = power_density_value * xy_resolution * xy_resolution * z_resolution;
                     }
                 }
             }
         }
     }
-    if (padding) {
-        // Duplicate the last row and column to pad the array by one (to handle boundary indexing)
-        int last_y = base_ny - 1;
-        int last_x = base_nx - 1;
-        for (int z = 0; z < nz_heat; ++z) {
-            // Copy last row (y = last_y) into new padded row (y = base_ny)
-            for (int xx = 0; xx < base_nx; ++xx) {
-                size_t orig_idx = (static_cast<size_t>(z) * power_dim_y + last_y) * power_dim_x + xx;
-                size_t pad_idx  = (static_cast<size_t>(z) * power_dim_y + base_ny) * power_dim_x + xx;
-                power_density[pad_idx] = power_density[orig_idx];
+    if(padding) {
+        // Copy the last row and column to the padded edge (to handle boundary indexing at ny or nx)
+        int last_y = ny; // index of the new padded row
+        int last_x = nx; // index of the new padded column
+        for(int iz = 0; iz < nz_heat; ++iz) {
+            // Copy last real row into padded row (for all x except padded column)
+            for(int ix = 0; ix < nx; ++ix) {
+                power_density[iz][last_y][ix] = power_density[iz][ny-1][ix];
             }
-            // Copy last column (x = last_x) into new padded column (x = base_nx)
-            for (int yy = 0; yy < base_ny; ++yy) {
-                size_t orig_idx = (static_cast<size_t>(z) * power_dim_y + yy) * power_dim_x + last_x;
-                size_t pad_idx  = (static_cast<size_t>(z) * power_dim_y + yy) * power_dim_x + base_nx;
-                power_density[pad_idx] = power_density[orig_idx];
+            // Copy last real column into padded column (for all y except padded row)
+            for(int iy = 0; iy < ny; ++iy) {
+                power_density[iz][iy][last_x] = power_density[iz][iy][nx-1];
             }
-            // Copy the bottom-right corner cell into the new corner (y = base_ny, x = base_nx)
-            size_t orig_corner_idx = (static_cast<size_t>(z) * power_dim_y + last_y) * power_dim_x + last_x;
-            size_t pad_corner_idx  = (static_cast<size_t>(z) * power_dim_y + base_ny) * power_dim_x + base_nx;
-            power_density[pad_corner_idx] = power_density[orig_corner_idx];
+            // Fill the bottom-right corner of padding
+            power_density[iz][last_y][last_x] = power_density[iz][ny-1][nx-1];
         }
     }
 }
 
-std::string GeometryConfig::get_region_by_z(int z_index) const {
-    if (z_index >= z_bottom_start && z_index <= z_bottom_end) {
+void GeometryConfig::precompute_conductance() {
+    if(precompute) {
+        return;  // already computed
+    }
+    // Prepare conductance_table with dimensions [nz_heat+2][ny][nx]
+    int z_count = nz_heat + 2;
+    conductance_table.resize(z_count);
+    for(int iz = 0; iz < z_count; ++iz) {
+        conductance_table[iz].assign(ny, vector<array<double,6>>(nx));
+    }
+    // Compute conductance for indices from bottom virtual layer (z_virtual1.first) to top virtual layer (z_virtual2.second)
+    int start_iz = z_virtual1.first;
+    int end_iz = z_virtual2.second;
+    std::cout << "Precomputing conductance values..." << std::endl;
+    for(int iz = start_iz; iz <= end_iz; ++iz) {
+        for(int iy = 0; iy < ny; ++iy) {
+            for(int ix = 0; ix < nx; ++ix) {
+                array<double,6> g = compute_conductance_indices(iz, iy, ix);
+                int table_index = iz - start_iz;
+                conductance_table[table_index][iy][ix] = g;
+            }
+        }
+    }
+    precompute = true;
+}
+
+array<double,6> GeometryConfig::compute_conductance_indices(int iz, int iy, int ix) const {
+    // Helper to get thermal conductivity k (W/m·K) at a given z-index
+    auto get_k_at_index = [&](int z_idx) -> double {
+        string region = get_region_by_z(z_idx);
+        // 125 W/m·K in heat_source region, 395 W/m·K otherwise
+        return (region == "heat_source") ? 125.0 : 395.0;
+    };
+
+    double k_center = get_k_at_index(iz);
+    double dx = xy_resolution;
+    double dy = xy_resolution;
+    double dz = z_resolution;
+    // Neighbor index shifts for six directions
+    static const array<pair<string, array<int,3>>, 6> directions = {{
+        {"+x", {0, 0, +1}},
+        {"-x", {0, 0, -1}},
+        {"+y", {0, +1, 0}},
+        {"-y", {0, -1, 0}},
+        {"+z", {+1, 0, 0}},
+        {"-z", {-1, 0, 0}}
+    }};
+    array<double,6> conductance;
+    for(size_t idx = 0; idx < directions.size(); ++idx) {
+        int iz_n = iz + directions[idx].second[0];
+        int iy_n = iy + directions[idx].second[1];
+        int ix_n = ix + directions[idx].second[2];
+        bool out_of_bounds = (ix_n < 0 || ix_n >= nx || iy_n < 0 || iy_n >= ny || iz_n < 0 || iz_n >= nz_total);
+        double A, d;
+        // Determine cross-sectional area A and distance d for this direction
+        if(directions[idx].first == "+x" || directions[idx].first == "-x") {
+            A = dy * dz;
+            d = dx;
+        } else if(directions[idx].first == "+y" || directions[idx].first == "-y") {
+            A = dx * dz;
+            d = dy;
+        } else {
+            A = dx * dy;
+            d = dz;
+        }
+        double g_val;
+        if(out_of_bounds) {
+            if(directions[idx].first == "+x" || directions[idx].first == "-x" ||
+               directions[idx].first == "+y" || directions[idx].first == "-y") {
+                // Lateral neighbor out of bounds: treat as semi-infinite boundary (one-sided resistance)
+                double r = (1.0 / k_center) * (d / A);
+                g_val = 1.0 / r;
+            } else {
+                // Vertical neighbor out of domain (should not occur in precomputed range)
+                g_val = 0.0;
+            }
+        } else {
+            double k_neighbor = get_k_at_index(iz_n);
+            // Thermal resistance r for center and neighbor in series
+            double r = 0.5 * (1.0 / k_center + 1.0 / k_neighbor) * (d / A);
+            g_val = 1.0 / r;
+        }
+        conductance[idx] = g_val;
+    }
+    return conductance;
+}
+
+string GeometryConfig::get_region_by_z(int z_index) const {
+    if(z_index >= z_bottom.first && z_index <= z_bottom.second) {
         return "bottom";
-    } else if (z_index >= z_virtual1_start && z_index <= z_virtual1_end) {
+    } else if(z_index >= z_virtual1.first && z_index <= z_virtual1.second) {
         return "virtual_bottom";
-    } else if (z_index >= z_heat_start && z_index <= z_heat_end) {
+    } else if(z_index >= z_heat.first && z_index <= z_heat.second) {
         return "heat_source";
-    } else if (z_index >= z_virtual2_start && z_index <= z_virtual2_end) {
+    } else if(z_index >= z_virtual2.first && z_index <= z_virtual2.second) {
         return "virtual_top";
-    } else if (z_index >= z_top_start && z_index <= (z_top_end + 1)) {
-        // Include z_top_end + 1 as part of "top" region (mirroring Python logic)
+    } else if(z_index >= z_top.first && z_index <= (z_top.second + 1)) {
         return "top";
     } else {
         return "out_of_domain";
     }
 }
 
-std::string GeometryConfig::get_region_by_coord(double z_coord) const {
-    if (z_coord < 0.0) {
-        return "out_of_domain";
-    }
+string GeometryConfig::get_region_by_coord(double z_coord) const {
     int z_index = static_cast<int>(std::floor(z_coord / z_resolution));
     return get_region_by_z(z_index);
 }
 
-std::tuple<std::string, std::string, double> GeometryConfig::is_near_boundary(const std::array<double,3>& pos) const {
+bool GeometryConfig::is_near_boundary(const array<double,3>& pos,
+                                      string& boundary_position,
+                                      BoundaryType& boundary_type,
+                                      double& boundary_param) const {
     double z = pos[0];
-    // Check proximity to top boundary
-    double eps_top = boundary_epsilon.at(top_boundary_type);
-    double eps_bottom = boundary_epsilon.at(bottom_boundary_type);
-    if (z >= nz_total * z_resolution - eps_top) {
-        // Near the top boundary
-        return { "top", top_boundary_type, top_boundary_param };
+    // Top boundary proximity check
+    double top_eps = boundary_epsilon[static_cast<int>(top_boundary_type)];
+    if(z >= nz_total * z_resolution - top_eps) {
+        boundary_position = "top";
+        boundary_type = top_boundary_type;
+        boundary_param = top_boundary_param;
+        return true;
     }
-    if (z <= eps_bottom) {
-        // Near the bottom boundary
-        return { "bottom", bottom_boundary_type, bottom_boundary_param };
+    // Bottom boundary proximity check
+    double bottom_eps = boundary_epsilon[static_cast<int>(bottom_boundary_type)];
+    if(z <= bottom_eps) {
+        boundary_position = "bottom";
+        boundary_type = bottom_boundary_type;
+        boundary_param = bottom_boundary_param;
+        return true;
     }
     // Not near top or bottom
-    return { "", "", 0.0 };
+    boundary_position.clear();
+    return false;
 }
 
-std::array<double,6> GeometryConfig::get_conductance(const std::array<double,3>& pos_meter) {
-    // Compute nearest grid indices for the given physical position
-    double z = pos_meter[0];
-    double y = pos_meter[1];
-    double x = pos_meter[2];
+array<double,6> GeometryConfig::get_conductance(const array<double,3>& pos) const {
+    // Compute grid indices from physical coordinates
+    double z = pos[0], y = pos[1], x = pos[2];
     int ix = static_cast<int>(std::floor(x / xy_resolution));
     int iy = static_cast<int>(std::floor(y / xy_resolution));
     int iz = static_cast<int>(std::floor(z / z_resolution));
-    // Always compute on the fly (precomputation not enabled by default)
-    return compute_conductance_indices(iz, iy, ix);
-}
-
-std::array<double,6> GeometryConfig::compute_conductance_indices(int iz, int iy, int ix) {
-    double k_center = material_conductivity(iz);
-    double dx = xy_resolution;
-    double dy = xy_resolution;
-    double dz = z_resolution;
-    std::array<double,6> g_vals;
-    // Neighbor index offsets for +x, -x, +y, -y, +z, -z directions
-    static const std::array<std::array<int,3>,6> offsets = {{
-        { 0,  0, +1},  // +x
-        { 0,  0, -1},  // -x
-        { 0, +1,  0},  // +y
-        { 0, -1,  0},  // -y
-        { +1, 0,  0},  // +z
-        { -1, 0,  0}   // -z
-    }};
-    for (int i = 0; i < 6; ++i) {
-        int iz_n = iz + offsets[i][0];
-        int iy_n = iy + offsets[i][1];
-        int ix_n = ix + offsets[i][2];
-        bool out_of_bounds = (ix_n < 0 || ix_n >= nx ||
-                               iy_n < 0 || iy_n >= ny ||
-                               iz_n < 0 || iz_n >= nz_total);
-        // Determine area A and distance d for this direction
-        double A, d;
-        if (i == 0 || i == 1) {        // ±x direction
-            A = dy * dz;
-            d = dx;
-        } else if (i == 2 || i == 3) { // ±y direction
-            A = dx * dz;
-            d = dy;
-        } else {                      // ±z direction
-            A = dx * dy;
-            d = dz;
+    // Use precomputed table if available and index is within its range
+    if(precompute && ix >= 0 && ix < nx && iy >= 0 && iy < ny &&
+       iz >= z_virtual1.first && iz <= z_virtual2.second) {
+        int table_index = iz - z_virtual1.first;
+        if(table_index >= 0 && table_index < static_cast<int>(conductance_table.size())) {
+            return conductance_table[table_index][iy][ix];
         }
-        double g;
-        if (out_of_bounds) {
-            if (i <= 3) {
-                // Lateral out-of-bound (Neumann boundary): treat as symmetric boundary
-                double R = (1.0 / k_center) * (d / A);
-                g = (R == 0.0 ? 0.0 : 1.0 / R);
-            } else {
-                // Out-of-domain in z-direction (top/bottom beyond domain): no conduction
-                g = 0.0;
-            }
-        } else {
-            // Neighbor within domain
-            double k_neighbor = material_conductivity(iz_n);
-            double R = 0.5 * ((1.0 / k_center) + (1.0 / k_neighbor)) * (d / A);
-            g = (R == 0.0 ? 0.0 : 1.0 / R);
-        }
-        g_vals[i] = g;
     }
-    return g_vals;
+    // Otherwise compute conductance on the fly
+    return compute_conductance_indices(iz, iy, ix);
 }
