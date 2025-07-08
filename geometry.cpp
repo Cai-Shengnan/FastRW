@@ -1,4 +1,6 @@
 #include "geometry.h"
+#include <fstream>
+
 
 using std::vector;
 using std::array;
@@ -18,12 +20,13 @@ GeometryConfig::GeometryConfig(double x_size_, double y_size_,
                                double lateral_boundary_param_,
                                double eps_dirichlet,
                                double eps_neumann,
-                               double eps_robin)
+                               double eps_robin,
+                               const std::string& power_density_path)
 : T_am(20.0),
   x_size(x_size_), y_size(y_size_),
-  bottom_thickness(bottom_thickness_ - z_resolution_), 
+  bottom_thickness(bottom_thickness_ - 1 * z_resolution_), 
   heat_source_thickness(heat_source_thickness_),
-  top_thickness(top_thickness_ - z_resolution_),
+  top_thickness(top_thickness_ - 1 * z_resolution_),
   virtual_layer_thickness(z_resolution_),
   xy_resolution(xy_resolution_), z_resolution(z_resolution_),
   top_boundary_type(top_boundary_type_),
@@ -50,7 +53,13 @@ GeometryConfig::GeometryConfig(double x_size_, double y_size_,
     z_virtual2  = {z_heat.second + 1, z_heat.second + nz_virtual};
     z_top       = {z_virtual2.second + 1, nz_total - 1};
     // Initialize the power density array and heat sources
-    initialize_heat_sources(true);
+    if (!power_density_path.empty()) {
+        std::cout << "[GeometryConfig] Loading power density from file: " << power_density_path << "\n";
+        load_power_density_from_file(power_density_path, true);
+    } else {
+        initialize_heat_sources(true);
+    }
+    
     // (Optional) Precompute conductance table is off by default (precompute remains false)
     // === Print configuration summary ===
     std::cout << "[GeometryConfig] Initialization Summary:\n";
@@ -290,4 +299,96 @@ array<double,6> GeometryConfig::get_conductance(const array<double,3>& pos) cons
     }
     // Otherwise compute conductance on the fly
     return compute_conductance_indices(iz, iy, ix);
+}
+
+
+void GeometryConfig::load_power_density_from_file(const std::string& filename, bool padding) {
+    int ny_size = ny + (padding ? 1 : 0);
+    int nx_size = nx + (padding ? 1 : 0);
+
+    power_density.resize(nz_heat);
+    for (int iz = 0; iz < nz_heat; ++iz) {
+        power_density[iz].resize(ny_size, std::vector<double>(nx_size, 0.0));
+    }
+
+    std::ifstream fin(filename, std::ios::binary);
+    if (!fin) {
+        throw std::runtime_error("Failed to open file: " + filename);
+    }
+
+    for (int iz = 0; iz < nz_heat; ++iz) {
+        for (int iy = 0; iy < ny; ++iy) {
+            for (int ix = 0; ix < nx; ++ix) {
+                double val;
+                fin.read(reinterpret_cast<char*>(&val), sizeof(double));
+                if (!fin) {
+                    throw std::runtime_error("Unexpected EOF or read error.");
+                }
+                power_density[iz][iy][ix] = val;
+            }
+        }
+    }
+    fin.close();
+
+    if (padding) {
+        int last_y = ny;
+        int last_x = nx;
+        for (int iz = 0; iz < nz_heat; ++iz) {
+            for (int ix = 0; ix < nx; ++ix) {
+                power_density[iz][last_y][ix] = power_density[iz][ny - 1][ix];
+            }
+            for (int iy = 0; iy < ny; ++iy) {
+                power_density[iz][iy][last_x] = power_density[iz][iy][nx - 1];
+            }
+            power_density[iz][last_y][last_x] = power_density[iz][ny - 1][nx - 1];
+        }
+    }
+
+    std::cout << "[GeometryConfig] Loaded power density from: " << filename << "\n";
+}
+
+
+void GeometryConfig::load_temperature_field_from_file(const std::string& filename) {
+    temperature_field.resize(nz_heat);
+    for (int iz = 0; iz < nz_heat; ++iz) {
+        temperature_field[iz].resize(ny);
+        for (int iy = 0; iy < ny; ++iy) {
+            temperature_field[iz][iy].resize(nx, 0.0);
+        }
+    }
+
+    std::ifstream fin(filename, std::ios::binary);
+    if (!fin) {
+        throw std::runtime_error("Failed to open temperature field file: " + filename);
+    }
+
+    for (int iz = 0; iz < nz_heat; ++iz) {
+        for (int iy = 0; iy < ny; ++iy) {
+            for (int ix = 0; ix < nx; ++ix) {
+                double val;
+                fin.read(reinterpret_cast<char*>(&val), sizeof(double));
+                if (!fin) {
+                    throw std::runtime_error("Unexpected EOF or read error in temperature field.");
+                }
+                temperature_field[iz][iy][ix] = val;
+            }
+        }
+    }
+    fin.close();
+    std::cout << "[GeometryConfig] Loaded temperature field from: " << filename << "\n";
+}
+
+
+double GeometryConfig::get_temperature_at(const std::array<double, 3>& pos) const {
+    // 坐标转 index，和 get_conductance 一样
+    double z = pos[0], y = pos[1], x = pos[2];
+    int iz = static_cast<int>(std::floor(z / z_resolution));
+    int iy = static_cast<int>(std::floor(y / xy_resolution));
+    int ix = static_cast<int>(std::floor(x / xy_resolution));
+
+    // 检查 index 合法性（仅在 heat_source 区域索引）
+    if (iz < 0 || iz >= nz_heat || iy < 0 || iy >= ny || ix < 0 || ix >= nx) {
+        throw std::out_of_range("Physical position out of temperature_field range");
+    }
+    return temperature_field[iz][iy][ix];
 }

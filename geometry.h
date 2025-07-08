@@ -28,7 +28,8 @@ public:
                    double lateral_boundary_param = 0.0,
                    double eps_dirichlet = 1e-8,
                    double eps_neumann = 1.5 * 5e-7,
-                   double eps_robin = 1.5 * 5e-7);
+                   double eps_robin = 1.5 * 5e-7,
+                   const std::string& power_density_path = "");
 
     // Pre-compute conductance for relevant grid points (optional optimization)
     void precompute_conductance();
@@ -46,6 +47,16 @@ public:
     // Compute thermal conductance to neighboring cells at a given position (z, y, x in meters).
     // Returns an array of 6 conductance values in the order: [+x, -x, +y, -y, +z, -z].
     std::array<double,6> get_conductance(const std::array<double,3>& pos) const;
+
+    // Load power density from binary file using internal dimensions
+    void load_power_density_from_file(const std::string& filename, bool padding);
+
+    // Load temperature field from binary file, same dimensions as power_density (no padding)
+    void load_temperature_field_from_file(const std::string& filename);
+
+    // Get temperature at a given physical position (z, y, x in meters)
+    double get_temperature_at(const std::array<double, 3>& pos) const;
+
 
     // Public members (geometry parameters and data)
     double T_am;  // Ambient temperature (e.g., 20°C)
@@ -71,6 +82,8 @@ public:
     // 3D array of volumetric heat power density (W/m^3) for the heat source region.
     // Dimensions: [nz_heat][ny+1][nx+1] (padded in y and x directions).
     std::vector<std::vector<std::vector<double>>> power_density;
+    // 3D array of temperature field (same logic as power_density, no padding)
+    std::vector<std::vector<std::vector<double>>> temperature_field;
 
 private:
     // Compute conductance at a specific grid index (iz, iy, ix)
