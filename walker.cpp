@@ -20,15 +20,13 @@ double RandomWalker::simulate_temperature(const Position& x0_meter, int N, int n
     if(N <= 0) {
         return 0.0;
     }
-    // Determine number of threads to use
     int workers = (num_workers <= 0 ? static_cast<int>(std::thread::hardware_concurrency()) : num_workers);
     if(workers < 1) workers = 1;
     if(workers == 1) {
-        // Single-threaded simulation with progress output
         double sum = 0.0;
         for(int i = 0; i < N; ++i) {
-            // Simulate one path
-            double value = simulate_single_path(x0_meter).first;
+            auto result = simulate_single_path(x0_meter);
+            double value = std::get<0>(result);
             sum += value;
             if((i + 1) % print_interval == 0) {
                 double current_mean = sum / (i + 1);
@@ -39,38 +37,47 @@ double RandomWalker::simulate_temperature(const Position& x0_meter, int N, int n
         }
         return sum / N;
     } else {
-        // Multi-threaded simulation
+        // 多线程部分
         int tasks_per_thread = N / workers;
         int remainder = N % workers;
+        
+        const double gt = geom.get_temperature_at(x0_meter);
+
         std::vector<double> partial_sums(workers, 0.0);
+        std::vector<double> partial_sq_sums(workers, 0.0);
         std::vector<std::thread> threads;
         threads.reserve(workers);
-        // Launch threads to perform simulations in parallel
         for(int t = 0; t < workers; ++t) {
             int count = tasks_per_thread + (t < remainder ? 1 : 0);
             threads.emplace_back([&, t, count]() {
                 double local_sum = 0.0;
-                // Each thread uses its own thread-local RNG
+                double local_sum_sq = 0.0;
                 for(int j = 0; j < count; ++j) {
-                    double value = simulate_single_path(x0_meter).first;
+                    auto result = simulate_single_path(x0_meter);
+                    double value = std::get<0>(result);
                     local_sum += value;
+                    local_sum_sq += (value - gt) * (value - gt);
+        
                 }
                 partial_sums[t] = local_sum;
+                partial_sq_sums[t] = local_sum_sq;
             });
         }
-        // Join threads
         for(auto& th : threads) {
             if(th.joinable()) {
                 th.join();
             }
         }
-        // Aggregate results from all threads
         double total_sum = std::accumulate(partial_sums.begin(), partial_sums.end(), 0.0);
+        double total_sq_sum = std::accumulate(partial_sq_sums.begin(), partial_sq_sums.end(), 0.0);
+        double variance = total_sq_sum / N;
+        std::cout << "Path Number : " << N << " Variance of single path " << variance << std::endl;
         return total_sum / N;
     }
 }
 
-std::pair<double, std::string> RandomWalker::simulate_single_path(const Position& x0_meter) {
+
+std::tuple<double, std::string> RandomWalker::simulate_single_path(const Position& x0_meter) {
     Position pos = x0_meter;
     double T_i[4] = {0.0, 0.0, 0.0, 0.0};
     double e_hat = 1.0;
@@ -79,10 +86,12 @@ std::pair<double, std::string> RandomWalker::simulate_single_path(const Position
     bool in_robin = false;
     double robin_parameter = 0.0;
     int step_count = 0;
+
     std::string end_boundary;  // will hold "top", "bottom", or empty
     std::string bc_pos;
     GeometryConfig::BoundaryType bc_type;
     double bc_param;
+
     while(step_count < max_steps) {
         std::string region = geom.get_region_by_coord(pos[0]);
         bool isNear = geom.is_near_boundary(pos, bc_pos, bc_type, bc_param);
@@ -152,11 +161,11 @@ std::pair<double, std::string> RandomWalker::simulate_single_path(const Position
         e_hat = result.second;
     }
     double total_T = T_i[0] + T_i[1] + T_i[2] + T_i[3];
-    return { total_T, end_boundary };
+    return { total_T, end_boundary};
 }
 
 // Optionally reseed RNG and call simulate_single_path (for use in parallel loops)
-std::pair<double, std::string> RandomWalker::simulate_single_path_wrapper(const Position& x0_meter) {
+std::tuple<double, std::string> RandomWalker::simulate_single_path_wrapper(const Position& x0_meter) {
     rng.seed(std::random_device()());  // new random seed for this execution
     return simulate_single_path(x0_meter);
 }

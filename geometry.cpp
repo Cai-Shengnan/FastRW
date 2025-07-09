@@ -382,12 +382,14 @@ void GeometryConfig::load_temperature_field_from_file(const std::string& filenam
 double GeometryConfig::get_temperature_at(const std::array<double, 3>& pos) const {
     // 坐标转 index，和 get_conductance 一样
     double z = pos[0], y = pos[1], x = pos[2];
-    int iz = static_cast<int>(std::floor(z / z_resolution));
+    int iz = static_cast<int>(std::floor(z / z_resolution)) - z_heat.first;
     int iy = static_cast<int>(std::floor(y / xy_resolution));
     int ix = static_cast<int>(std::floor(x / xy_resolution));
 
     // 检查 index 合法性（仅在 heat_source 区域索引）
     if (iz < 0 || iz >= nz_heat || iy < 0 || iy >= ny || ix < 0 || ix >= nx) {
+        std::cout << z << " " << y << " " << x << std::endl;
+        std::cout << iz << " " << iy << " " << ix << std::endl;
         throw std::out_of_range("Physical position out of temperature_field range");
     }
     return temperature_field[iz][iy][ix];

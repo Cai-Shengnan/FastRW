@@ -23,7 +23,7 @@ public:
 
     // Simulate a single random walk path. 
     // Returns a pair: (computed temperature contribution, boundary_position where the walk ended ["top"/"bottom" or empty if none]).
-    std::pair<double, std::string> simulate_single_path(const Position& x0_meter);
+    std::tuple<double, std::string> simulate_single_path(const Position& x0_meter);
 
 private:
     GeometryConfig& geom;     // Reference to geometry configuration (domain and parameters)
@@ -32,7 +32,7 @@ private:
     double delta_x;           // WOS jump radius near boundaries (Δx)
 
     // Internal function for simulate_temperature parallelization (reseeds RNG for each call if needed).
-    std::pair<double, std::string> simulate_single_path_wrapper(const Position& x0_meter);
+    std::tuple<double, std::string> simulate_single_path_wrapper(const Position& x0_meter);
 
     // Helper functions corresponding to internal methods in the Python code:
     // Escape from Robin boundary region: compute contribution and update e_hat.
