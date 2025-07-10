@@ -28,13 +28,16 @@ struct GridIndexHash {
     }
 };
 
+struct PassSample {
+    int target_index;  // index of point Y that the path passed through
+    double t_sum;      // partial sum when hitting Y
+    double e_hat;      // accumulated weight when hitting Y
+};
+
 struct MultiPointStats {
-    int normal_count;
-    double normal_mean;
-    int pass_count;
-    double pass_mean;
-    int total_count;
-    double total_mean;
+    int normal_count;    // number of direct path samples
+    double normal_mean; // mean temperature from direct samples
+    double ls_result;    // temperature estimated via least squares
 };
 
 class RandomWalker {
@@ -71,7 +74,7 @@ private:
 
     // Simulate a single path and record intermediate estimates when passing
     // through target grid points.
-    std::tuple<double, std::vector<std::pair<int,double>>, int>
+    std::tuple<double, std::vector<PassSample>, int>
     simulate_single_path_record(
         const Position& x0_meter,
         const std::unordered_map<GridIndex,int,GridIndexHash>& target_map);

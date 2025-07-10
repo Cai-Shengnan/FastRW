@@ -9,9 +9,30 @@
 #include <atomic>
 #include <iomanip>
 #include <unordered_map>
+#include <chrono>
 
 // Thread-local random number generator (Mersenne Twister) seeded with a random device
 static thread_local std::mt19937 rng((std::random_device())());
+
+// Solve least squares using Eigen library
+#include <Eigen/Dense>
+static std::vector<double> solve_least_squares(
+        const std::vector<std::vector<double>>& A,
+        const std::vector<double>& b) {
+    int m = static_cast<int>(A.size());
+    if(m == 0) return {};
+    int n = static_cast<int>(A[0].size());
+    Eigen::MatrixXd matA(m, n);
+    Eigen::VectorXd vecb(m);
+    for(int i = 0; i < m; ++i) {
+        vecb(i) = b[i];
+        for(int j = 0; j < n; ++j) {
+            matA(i, j) = A[i][j];
+        }
+    }
+    Eigen::VectorXd x = matA.colPivHouseholderQr().solve(vecb);
+    return std::vector<double>(x.data(), x.data() + x.size());
+}
 
 // RandomWalker constructor
 RandomWalker::RandomWalker(GeometryConfig& geometry_config, double max_steps_, double eps_, double delta_x_)
@@ -96,8 +117,10 @@ std::vector<MultiPointStats> RandomWalker::simulate_temperature_multi(
 
     std::vector<double> normal_sums(k, 0.0);
     std::vector<int> normal_counts(k, 0);
-    std::vector<double> pass_sums(k, 0.0);
-    std::vector<int> pass_counts(k, 0);
+
+    // store linear system rows for least squares
+    std::vector<std::vector<double>> A_rows;
+    std::vector<double> b_rows;
 
     std::unordered_map<GridIndex,int,GridIndexHash> target_map;
     for(int i = 0; i < k; ++i) {
@@ -107,27 +130,48 @@ std::vector<MultiPointStats> RandomWalker::simulate_temperature_multi(
         target_map[{iz,iy,ix}] = i;
     }
 
+    auto sim_start = std::chrono::high_resolution_clock::now();
+
     for(int idx = 0; idx < k; ++idx) {
         for(int j = 0; j < N; ++j) {
             auto result = simulate_single_path_record(start_points[idx], target_map);
             double value = std::get<0>(result);
             const auto& passes = std::get<1>(result);
+
             normal_sums[idx] += value;
             normal_counts[idx]++;
+
+            std::vector<double> row(k, 0.0);
+            row[idx] = 1.0;
+            A_rows.push_back(row);
+            b_rows.push_back(value);
+
             for(const auto& p : passes) {
-                pass_sums[p.first] += p.second;
-                pass_counts[p.first]++;
+                std::vector<double> prow(k, 0.0);
+                prow[idx] = 1.0;
+                prow[p.target_index] = -p.e_hat;
+                A_rows.push_back(prow);
+                b_rows.push_back(p.t_sum);
             }
         }
     }
 
+    auto sim_end = std::chrono::high_resolution_clock::now();
+    double sim_time = std::chrono::duration<double>(sim_end - sim_start).count();
+
+    auto ls_start = std::chrono::high_resolution_clock::now();
+    std::vector<double> ls_result = solve_least_squares(A_rows, b_rows);
+    auto ls_end = std::chrono::high_resolution_clock::now();
+    double ls_time = std::chrono::duration<double>(ls_end - ls_start).count();
+
+    std::cout << "Random walk simulation time: " << sim_time << " s" << std::endl;
+    std::cout << "Least squares solve time: " << ls_time << " s" << std::endl;
+
     std::vector<MultiPointStats> stats(k);
     for(int i = 0; i < k; ++i) {
         double normal_mean = normal_sums[i] / normal_counts[i];
-        double pass_mean = pass_counts[i] > 0 ? pass_sums[i] / pass_counts[i] : 0.0;
-        int total_c = normal_counts[i] + pass_counts[i];
-        double total_m = (normal_sums[i] + pass_sums[i]) / (total_c > 0 ? total_c : 1);
-        stats[i] = {normal_counts[i], normal_mean, pass_counts[i], pass_mean, total_c, total_m};
+        double ls_val = (i < static_cast<int>(ls_result.size())) ? ls_result[i] : 0.0;
+        stats[i] = {normal_counts[i], normal_mean, ls_val};
     }
     return stats;
 }
@@ -233,7 +277,7 @@ std::tuple<double, std::string, int> RandomWalker::simulate_single_path_wrapper(
     return simulate_single_path(x0_meter);
 }
 
-std::tuple<double, std::vector<std::pair<int,double>>, int>
+std::tuple<double, std::vector<PassSample>, int>
 RandomWalker::simulate_single_path_record(
     const Position& x0_meter,
     const std::unordered_map<GridIndex,int,GridIndexHash>& target_map) {
@@ -251,7 +295,7 @@ RandomWalker::simulate_single_path_record(
     GeometryConfig::BoundaryType bc_type;
     double bc_param;
 
-    std::vector<std::pair<int,double>> pass_samples;
+    std::vector<PassSample> pass_samples;
 
     while(step_count < max_steps) {
         std::string region = geom.get_region_by_coord(pos[0]);
@@ -266,8 +310,7 @@ RandomWalker::simulate_single_path_record(
                 if(std::abs(1.0 - e_hat) > 0.1) {
                     double reward = get_heat_reward(pos);
                     double t_sum = T_i[0] + T_i[1] + T_i[2] + T_i[3] + e_hat * reward;
-                    double estimate = t_sum / (1.0 - e_hat);
-                    pass_samples.emplace_back(it->second, estimate);
+                    pass_samples.push_back({it->second, t_sum, e_hat});
                 }
             }
         }
