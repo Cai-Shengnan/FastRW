@@ -33,7 +33,7 @@ int main() {
     for(size_t i = 0; i < stats.size(); ++i) {
         const auto& s = stats[i];
         std::cout << "Point " << i << ": direct_mean=" << s.normal_mean
-                  << ", lsq_result=" << s.ls_result << std::endl;
+                 << std::endl;
     }
 
 

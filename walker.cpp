@@ -14,31 +14,14 @@
 // Thread-local random number generator (Mersenne Twister) seeded with a random device
 static thread_local std::mt19937 rng((std::random_device())());
 
-// Solve least squares using Eigen library
-#include <Eigen/Dense>
-static std::vector<double> solve_least_squares(
-        const std::vector<std::vector<double>>& A,
-        const std::vector<double>& b) {
-    int m = static_cast<int>(A.size());
-    if(m == 0) return {};
-    int n = static_cast<int>(A[0].size());
-    Eigen::MatrixXd matA(m, n);
-    Eigen::VectorXd vecb(m);
-    for(int i = 0; i < m; ++i) {
-        vecb(i) = b[i];
-        for(int j = 0; j < n; ++j) {
-            matA(i, j) = A[i][j];
-        }
-    }
-    Eigen::VectorXd x = matA.colPivHouseholderQr().solve(vecb);
-    return std::vector<double>(x.data(), x.data() + x.size());
-}
-
 // RandomWalker constructor
 RandomWalker::RandomWalker(GeometryConfig& geometry_config, double max_steps_, double eps_, double delta_x_)
 : geom(geometry_config), max_steps(max_steps_), eps(eps_), delta_x(delta_x_) {
     // No additional initialization needed
 }
+
+
+
 
 double RandomWalker::simulate_temperature(const Position& x0_meter, int N, int num_workers, int print_interval) {
     if(N <= 0) {
@@ -110,56 +93,78 @@ double RandomWalker::simulate_temperature(const Position& x0_meter, int N, int n
 }
 
 std::vector<MultiPointStats> RandomWalker::simulate_temperature_multi(
-        const std::vector<Position>& start_points, int N,
-        int num_workers, int print_interval) {
+    const std::vector<Position>& start_points, int N,
+    int num_workers, int print_interval) {
+
     int k = static_cast<int>(start_points.size());
-    if(k == 0 || N <= 0) return {};
+    if (k == 0 || N <= 0) return {};
 
     std::vector<double> normal_sums(k, 0.0);
     std::vector<int> normal_counts(k, 0);
 
-    // store linear system rows for least squares
-    std::vector<std::vector<double>> A_rows;
-    std::vector<double> b_rows;
     double residual_total = 0.0;
     int residual_count = 0;
 
-    std::unordered_map<GridIndex,int,GridIndexHash> target_map;
-    for(int i = 0; i < k; ++i) {
+    std::unordered_map<GridIndex, int, GridIndexHash> target_map;
+    for (int i = 0; i < k; ++i) {
         int iz = static_cast<int>(std::floor(start_points[i][0] / geom.z_resolution));
         int iy = static_cast<int>(std::floor(start_points[i][1] / geom.xy_resolution));
         int ix = static_cast<int>(std::floor(start_points[i][2] / geom.xy_resolution));
-        target_map[{iz,iy,ix}] = i;
+        target_map[{iz, iy, ix}] = i;
     }
 
     auto sim_start = std::chrono::high_resolution_clock::now();
 
-    for(int idx = 0; idx < k; ++idx) {
-        for(int j = 0; j < N; ++j) {
-            auto result = simulate_single_path_record(start_points[idx], target_map);
-            double value = std::get<0>(result);
-            const auto& passes = std::get<1>(result);
+    std::mutex mtx;
+    int total_tasks = k * N;
+    std::atomic<int> next_task(0);
 
-            normal_sums[idx] += value;
-            normal_counts[idx]++;
+    int workers = (num_workers <= 0 ? static_cast<int>(std::thread::hardware_concurrency()) : num_workers);
+    if (workers < 1) workers = 1;
+    std::cout << "Number of workers: " << workers << std::endl;
 
-            std::vector<double> row(k, 0.0);
-            row[idx] = 1.0;
-            A_rows.push_back(row);
-            b_rows.push_back(value);
+    std::vector<std::thread> threads;
+    for (int t = 0; t < workers; ++t) {
+        threads.emplace_back([&]() {
 
-            for(const auto& p : passes) {
-                std::vector<double> prow(k, 0.0);
-                prow[idx] = 1.0;
-                prow[p.target_index] = -p.e_hat;
-                A_rows.push_back(prow);
-                b_rows.push_back(p.t_sum);
-                double Tx = geom.get_temperature_at(start_points[idx]);
-                double Ty = geom.get_temperature_at(start_points[p.target_index]);
-                residual_total += Tx - p.e_hat * Ty - p.t_sum;
-                residual_count++;
+            std::vector<double> local_sums(k, 0.0);
+            std::vector<int> local_counts(k, 0);
+            double local_residual = 0.0;
+            int local_r_count = 0;
+
+            while (true) {
+                int task_index = next_task.fetch_add(1);
+                if (task_index >= total_tasks) break;
+
+                int idx = task_index / N; // start point index
+                auto result = simulate_single_path_record(start_points[idx], target_map);
+                double value = std::get<0>(result);
+                const auto& passes = std::get<1>(result);
+
+                local_sums[idx] += value;
+                local_counts[idx]++;
+
+                for (const auto& p : passes) {
+
+                    double Tx = geom.get_temperature_at(start_points[idx]);
+                    double Ty = geom.get_temperature_at(start_points[p.target_index]);
+                    local_residual += Tx - p.e_hat * Ty - p.t_sum;
+                    local_r_count++;
+                }
             }
-        }
+
+            std::lock_guard<std::mutex> lock(mtx);
+            for (int i = 0; i < k; ++i) {
+                normal_sums[i] += local_sums[i];
+                normal_counts[i] += local_counts[i];
+            }
+            residual_total += local_residual;
+            residual_count += local_r_count;
+        });
+    }
+
+    for (auto& th : threads) {
+        if (th.joinable()) th.join();
     }
 
     auto sim_end = std::chrono::high_resolution_clock::now();
@@ -169,23 +174,15 @@ std::vector<MultiPointStats> RandomWalker::simulate_temperature_multi(
     std::cout << "Mean residual T(X)-e_hat*T(Y)-t_sum: "
               << residual_mean << " residual_count " << residual_count << std::endl;
 
-    auto ls_start = std::chrono::high_resolution_clock::now();
-    std::vector<double> ls_result = solve_least_squares(A_rows, b_rows);
-    auto ls_end = std::chrono::high_resolution_clock::now();
-    double ls_time = std::chrono::duration<double>(ls_end - ls_start).count();
-
     std::cout << "Random walk simulation time: " << sim_time << " s" << std::endl;
-    std::cout << "Least squares solve time: " << ls_time << " s" << std::endl;
 
     std::vector<MultiPointStats> stats(k);
-    for(int i = 0; i < k; ++i) {
-        double normal_mean = normal_sums[i] / normal_counts[i];
-        double ls_val = (i < static_cast<int>(ls_result.size())) ? ls_result[i] : 0.0;
-        stats[i] = {normal_counts[i], normal_mean, ls_val};
+    for (int i = 0; i < k; ++i) {
+        double normal_mean = normal_counts[i] > 0 ? normal_sums[i] / normal_counts[i] : 0.0;
+        stats[i] = {normal_counts[i], normal_mean};
     }
     return stats;
 }
-
 
 std::tuple<double, std::string, int> RandomWalker::simulate_single_path(const Position& x0_meter) {
     Position pos = x0_meter;
@@ -305,12 +302,14 @@ RandomWalker::simulate_single_path_record(
     GeometryConfig::BoundaryType bc_type;
     double bc_param;
 
+    int last_record = 0;
+
     std::vector<PassSample> pass_samples;
 
     while(step_count < max_steps) {
         std::string region = geom.get_region_by_coord(pos[0]);
 
-        if(region == "heat_source") {
+        if(step_count - last_record > 1000 && region == "heat_source") {
             int iz = static_cast<int>(std::floor(pos[0] / geom.z_resolution));
             int iy = static_cast<int>(std::floor(pos[1] / geom.xy_resolution));
             int ix = static_cast<int>(std::floor(pos[2] / geom.xy_resolution));
@@ -321,6 +320,7 @@ RandomWalker::simulate_single_path_record(
                     double reward = get_heat_reward(pos);
                     double t_sum = T_i[0] + T_i[1] + T_i[2] + T_i[3] + e_hat * reward;
                     pass_samples.push_back({it->second, t_sum, e_hat});
+                    last_record = step_count;
                 }
             }
         }
