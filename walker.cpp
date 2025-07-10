@@ -2,6 +2,7 @@
 #include <iostream>
 #include <random>
 #include <thread>
+#include <mutex>
 #include <numeric>
 #include <cmath>
 #include <cassert>
@@ -24,6 +25,7 @@ double RandomWalker::simulate_temperature(const Position& x0_meter, int N, int n
 
     std::vector<double> samples;
     samples.reserve(N);
+    long long total_steps = 0;
 
     int workers = (num_workers <= 0 ? static_cast<int>(std::thread::hardware_concurrency()) : num_workers);
     if(workers < 1) workers = 1;
@@ -34,7 +36,9 @@ double RandomWalker::simulate_temperature(const Position& x0_meter, int N, int n
         for(int i = 0; i < N; ++i) {
             auto result = simulate_single_path(x0_meter);
             double value = std::get<0>(result);
+            int steps = std::get<2>(result);
             sum += value;
+            total_steps += steps;
             samples.push_back(value);
 
             if((i + 1) % print_interval == 0) {
@@ -54,14 +58,18 @@ double RandomWalker::simulate_temperature(const Position& x0_meter, int N, int n
             int count = tasks_per_thread + (t < remainder ? 1 : 0);
             threads.emplace_back([&, count]() {
                 std::vector<double> local_samples;
+                long long local_steps = 0;
                 for(int j = 0; j < count; ++j) {
                     auto result = simulate_single_path(x0_meter);
                     double value = std::get<0>(result);
+                    int steps = std::get<2>(result);
                     local_samples.push_back(value);
+                    local_steps += steps;
                 }
                 // 合并结果（线程安全）
                 std::lock_guard<std::mutex> lock(mutex);
                 samples.insert(samples.end(), local_samples.begin(), local_samples.end());
+                total_steps += local_steps;
             });
         }
 
@@ -73,11 +81,14 @@ double RandomWalker::simulate_temperature(const Position& x0_meter, int N, int n
 
     // 返回均值
     double total = std::accumulate(samples.begin(), samples.end(), 0.0);
-    return total / N;
+    double mean = total / N;
+    double avg_steps = static_cast<double>(total_steps) / N;
+    std::cout << "Average steps per path: " << avg_steps << std::endl;
+    return mean;
 }
 
 
-std::tuple<double, std::string> RandomWalker::simulate_single_path(const Position& x0_meter) {
+std::tuple<double, std::string, int> RandomWalker::simulate_single_path(const Position& x0_meter) {
     Position pos = x0_meter;
     double T_i[4] = {0.0, 0.0, 0.0, 0.0};
     double e_hat = 1.0;
@@ -168,11 +179,11 @@ std::tuple<double, std::string> RandomWalker::simulate_single_path(const Positio
     
     double total_T = T_i[0] + T_i[1] + T_i[2] + T_i[3];
 
-    return { total_T, end_boundary};
+    return { total_T, end_boundary, step_count };
 }
 
 // Optionally reseed RNG and call simulate_single_path (for use in parallel loops)
-std::tuple<double, std::string> RandomWalker::simulate_single_path_wrapper(const Position& x0_meter) {
+std::tuple<double, std::string, int> RandomWalker::simulate_single_path_wrapper(const Position& x0_meter) {
     rng.seed(std::random_device()());  // new random seed for this execution
     return simulate_single_path(x0_meter);
 }
