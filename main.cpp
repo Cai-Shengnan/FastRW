@@ -18,17 +18,17 @@ int main() {
         1e-8, 1.5 * 5e-7, 1.5 * 5e-7,
         "/Users/zxwang/Documents/codes/ResRW/RR_0000_power.bin"
     );
-    geom.load_temperature_field_from_file("/Users/zxwang/Documents/codes/ResRW/RR_00000_temp.bin");
+    geom.load_temperature_field_from_file("/Users/zxwang/Documents/codes/ResRW/RR_0000_temp.bin");
     // Initialize RandomWalker with the geometry
     RandomWalker walker(geom);
     // Define several points inside the heat source region
     std::vector<Position> points = {
-        {5.5e-4, 0.005, 0.015},
-        {5.5e-4, 0.01, 0.005},
-        {5.5e-4, 0.015, 0.015}
+        {5.5e-4, 0.0051, 0.0151},
+        {5.5e-4, 0.0101, 0.0101},
+        {5.5e-4, 0.0151, 0.0051}
     };
 
-    auto stats = walker.simulate_temperature_multi(points, 500);
+    auto stats = walker.simulate_temperature_multi(points, 10);
     for(size_t i = 0; i < stats.size(); ++i) {
         const auto& s = stats[i];
         std::cout << "Point " << i << ": normal(" << s.normal_count << ") mean=" << s.normal_mean
