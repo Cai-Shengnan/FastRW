@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cassert>
 #include <atomic>
+#include <iomanip>
 
 // Thread-local random number generator (Mersenne Twister) seeded with a random device
 static thread_local std::mt19937 rng((std::random_device())());
@@ -20,60 +21,60 @@ double RandomWalker::simulate_temperature(const Position& x0_meter, int N, int n
     if(N <= 0) {
         return 0.0;
     }
+
+    const double gt = geom.get_temperature_at(x0_meter);  // PDE预测温度 mu0
+    std::vector<double> samples;
+    samples.reserve(N);
+
     int workers = (num_workers <= 0 ? static_cast<int>(std::thread::hardware_concurrency()) : num_workers);
     if(workers < 1) workers = 1;
+
+    // 单线程模式
     if(workers == 1) {
         double sum = 0.0;
         for(int i = 0; i < N; ++i) {
             auto result = simulate_single_path(x0_meter);
             double value = std::get<0>(result);
             sum += value;
+            samples.push_back(value);
+
             if((i + 1) % print_interval == 0) {
                 double current_mean = sum / (i + 1);
-                std::cout.setf(std::ios::fixed);
-                std::cout.precision(6);
-                std::cout << "[" << (i + 1) << "/" << N << "] Current Mean: " << current_mean << std::endl;
+                std::cout << "[" << (i + 1) << "/" << N << "] Current Mean: " << std::fixed << std::setprecision(6) << current_mean << std::endl;
             }
         }
-        return sum / N;
     } else {
-        // 多线程部分
+        // 多线程
         int tasks_per_thread = N / workers;
         int remainder = N % workers;
-        
-        const double gt = geom.get_temperature_at(x0_meter);
-
-        std::vector<double> partial_sums(workers, 0.0);
-        std::vector<double> partial_sq_sums(workers, 0.0);
         std::vector<std::thread> threads;
+        std::mutex mutex;
         threads.reserve(workers);
+
         for(int t = 0; t < workers; ++t) {
             int count = tasks_per_thread + (t < remainder ? 1 : 0);
-            threads.emplace_back([&, t, count]() {
-                double local_sum = 0.0;
-                double local_sum_sq = 0.0;
+            threads.emplace_back([&, count]() {
+                std::vector<double> local_samples;
                 for(int j = 0; j < count; ++j) {
                     auto result = simulate_single_path(x0_meter);
                     double value = std::get<0>(result);
-                    local_sum += value;
-                    local_sum_sq += (value - gt) * (value - gt);
-        
+                    local_samples.push_back(value);
                 }
-                partial_sums[t] = local_sum;
-                partial_sq_sums[t] = local_sum_sq;
+                // 合并结果（线程安全）
+                std::lock_guard<std::mutex> lock(mutex);
+                samples.insert(samples.end(), local_samples.begin(), local_samples.end());
             });
         }
+
         for(auto& th : threads) {
-            if(th.joinable()) {
-                th.join();
-            }
+            if(th.joinable()) th.join();
         }
-        double total_sum = std::accumulate(partial_sums.begin(), partial_sums.end(), 0.0);
-        double total_sq_sum = std::accumulate(partial_sq_sums.begin(), partial_sq_sums.end(), 0.0);
-        double variance = total_sq_sum / N;
-        std::cout << "Path Number : " << N << " Variance of single path " << variance << std::endl;
-        return total_sum / N;
     }
+
+
+    // 返回均值
+    double total = std::accumulate(samples.begin(), samples.end(), 0.0);
+    return total / N;
 }
 
 
@@ -92,6 +93,7 @@ std::tuple<double, std::string> RandomWalker::simulate_single_path(const Positio
     GeometryConfig::BoundaryType bc_type;
     double bc_param;
 
+
     while(step_count < max_steps) {
         std::string region = geom.get_region_by_coord(pos[0]);
         bool isNear = geom.is_near_boundary(pos, bc_pos, bc_type, bc_param);
@@ -99,6 +101,10 @@ std::tuple<double, std::string> RandomWalker::simulate_single_path(const Positio
             if(region == "heat_source" || region == "virtual_top" || region == "virtual_bottom") {
                 double reward = (region == "heat_source") ? get_heat_reward(pos) : 0.0;
                 T_i[0] += e_hat * reward;
+                if(e_hat < 0.1 && region == "heat_source" ){
+                    T_i[1] += e_hat * geom.get_temperature_at(pos);
+                    break;
+                }
                 pos = step_wog(pos);
             } else {
                 if(in_robin) {
@@ -160,7 +166,9 @@ std::tuple<double, std::string> RandomWalker::simulate_single_path(const Positio
         T_i[3] += result.first;
         e_hat = result.second;
     }
+    
     double total_T = T_i[0] + T_i[1] + T_i[2] + T_i[3];
+
     return { total_T, end_boundary};
 }
 
