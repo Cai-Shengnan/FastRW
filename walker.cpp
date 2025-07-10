@@ -8,6 +8,7 @@
 #include <cassert>
 #include <atomic>
 #include <iomanip>
+#include <unordered_map>
 
 // Thread-local random number generator (Mersenne Twister) seeded with a random device
 static thread_local std::mt19937 rng((std::random_device())());
@@ -85,6 +86,50 @@ double RandomWalker::simulate_temperature(const Position& x0_meter, int N, int n
     double avg_steps = static_cast<double>(total_steps) / N;
     std::cout << "Average steps per path: " << avg_steps << std::endl;
     return mean;
+}
+
+std::vector<MultiPointStats> RandomWalker::simulate_temperature_multi(
+        const std::vector<Position>& start_points, int N,
+        int num_workers, int print_interval) {
+    int k = static_cast<int>(start_points.size());
+    if(k == 0 || N <= 0) return {};
+
+    std::vector<double> normal_sums(k, 0.0);
+    std::vector<int> normal_counts(k, 0);
+    std::vector<double> pass_sums(k, 0.0);
+    std::vector<int> pass_counts(k, 0);
+
+    std::unordered_map<GridIndex,int,GridIndexHash> target_map;
+    for(int i = 0; i < k; ++i) {
+        int iz = static_cast<int>(std::floor(start_points[i][0] / geom.z_resolution));
+        int iy = static_cast<int>(std::floor(start_points[i][1] / geom.xy_resolution));
+        int ix = static_cast<int>(std::floor(start_points[i][2] / geom.xy_resolution));
+        target_map[{iz,iy,ix}] = i;
+    }
+
+    for(int idx = 0; idx < k; ++idx) {
+        for(int j = 0; j < N; ++j) {
+            auto result = simulate_single_path_record(start_points[idx], target_map);
+            double value = std::get<0>(result);
+            const auto& passes = std::get<1>(result);
+            normal_sums[idx] += value;
+            normal_counts[idx]++;
+            for(const auto& p : passes) {
+                pass_sums[p.first] += p.second;
+                pass_counts[p.first]++;
+            }
+        }
+    }
+
+    std::vector<MultiPointStats> stats(k);
+    for(int i = 0; i < k; ++i) {
+        double normal_mean = normal_sums[i] / normal_counts[i];
+        double pass_mean = pass_counts[i] > 0 ? pass_sums[i] / pass_counts[i] : 0.0;
+        int total_c = normal_counts[i] + pass_counts[i];
+        double total_m = (normal_sums[i] + pass_sums[i]) / (total_c > 0 ? total_c : 1);
+        stats[i] = {normal_counts[i], normal_mean, pass_counts[i], pass_mean, total_c, total_m};
+    }
+    return stats;
 }
 
 
@@ -186,6 +231,121 @@ std::tuple<double, std::string, int> RandomWalker::simulate_single_path(const Po
 std::tuple<double, std::string, int> RandomWalker::simulate_single_path_wrapper(const Position& x0_meter) {
     rng.seed(std::random_device()());  // new random seed for this execution
     return simulate_single_path(x0_meter);
+}
+
+std::tuple<double, std::vector<std::pair<int,double>>, int>
+RandomWalker::simulate_single_path_record(
+    const Position& x0_meter,
+    const std::unordered_map<GridIndex,int,GridIndexHash>& target_map) {
+    Position pos = x0_meter;
+    double T_i[4] = {0.0, 0.0, 0.0, 0.0};
+    double e_hat = 1.0;
+    int near_robin = 0;
+    int hit_robin = 0;
+    bool in_robin = false;
+    double robin_parameter = 0.0;
+    int step_count = 0;
+
+    std::string end_boundary;
+    std::string bc_pos;
+    GeometryConfig::BoundaryType bc_type;
+    double bc_param;
+
+    std::vector<std::pair<int,double>> pass_samples;
+
+    while(step_count < max_steps) {
+        std::string region = geom.get_region_by_coord(pos[0]);
+
+        if(region == "heat_source") {
+            int iz = static_cast<int>(std::floor(pos[0] / geom.z_resolution));
+            int iy = static_cast<int>(std::floor(pos[1] / geom.xy_resolution));
+            int ix = static_cast<int>(std::floor(pos[2] / geom.xy_resolution));
+            GridIndex gi{iz, iy, ix};
+            auto it = target_map.find(gi);
+            if(it != target_map.end()) {
+                if(std::abs(1.0 - e_hat) > 0.1) {
+                    double reward = get_heat_reward(pos);
+                    double t_sum = T_i[0] + T_i[1] + T_i[2] + T_i[3] + e_hat * reward;
+                    double estimate = t_sum / (1.0 - e_hat);
+                    pass_samples.emplace_back(it->second, estimate);
+                }
+            }
+        }
+
+        bool isNear = geom.is_near_boundary(pos, bc_pos, bc_type, bc_param);
+        if(!isNear) {
+            if(region == "heat_source" || region == "virtual_top" || region == "virtual_bottom") {
+                double reward = (region == "heat_source") ? get_heat_reward(pos) : 0.0;
+                T_i[0] += e_hat * reward;
+                if(e_hat < 0.1 && region == "heat_source" ){
+                    T_i[1] += e_hat * geom.get_temperature_at(pos);
+                    break;
+                }
+                pos = step_wog(pos);
+            } else {
+                if(in_robin) {
+                    auto result = escape_robin(e_hat, hit_robin, near_robin, robin_parameter);
+                    double sub_T3 = result.first;
+                    e_hat = result.second;
+                    T_i[3] += sub_T3;
+                    near_robin = 0;
+                    hit_robin = 0;
+                    in_robin = false;
+                    robin_parameter = 0.0;
+                }
+                pos = step_wos(pos).first;
+            }
+        } else {
+            if(bc_type == GeometryConfig::BoundaryType::Dirichlet) {
+                double phi = bc_param;
+                T_i[1] += e_hat * phi;
+                end_boundary = bc_pos;
+                break;
+            } else {
+                bool is_top = (bc_pos == "top");
+                bool is_very_close;
+                if(is_top) {
+                    is_very_close = (pos[0] >= geom.nz_total * geom.z_resolution - delta_x);
+                } else {
+                    is_very_close = (pos[0] <= delta_x);
+                }
+                double step_length = is_very_close ? (2 * delta_x) : delta_x;
+                if(bc_type == GeometryConfig::BoundaryType::Neumann) {
+                    double dL = estimate_local_time_increment(bc_type);
+                    double phi = bc_param;
+                    T_i[2] += e_hat * phi * dL;
+                    pos = step_wos(pos, step_length).first;
+                } else if(bc_type == GeometryConfig::BoundaryType::Robin) {
+                    if(!in_robin) {
+                        assert(near_robin == 0 && hit_robin == 0);
+                        in_robin = true;
+                        robin_parameter = bc_param;
+                    }
+                    if(is_very_close){
+                        near_robin += 4;
+                    } else{
+                        near_robin += 1;
+                    }
+
+                    bool boundary_hit;
+                    std::tie(pos, boundary_hit) = step_wos(pos, step_length);
+                    if(boundary_hit) {
+                        hit_robin += 1;
+                    }
+                }
+            }
+        }
+        step_count++;
+    }
+    if(in_robin) {
+        auto result = escape_robin(e_hat, hit_robin, near_robin, robin_parameter);
+        T_i[3] += result.first;
+        e_hat = result.second;
+    }
+
+    double total_T = T_i[0] + T_i[1] + T_i[2] + T_i[3];
+
+    return { total_T, pass_samples, step_count };
 }
 
 std::pair<double, double> RandomWalker::escape_robin(double e_hat, int hit_robin, int near_robin, double robin_param) {
