@@ -22,10 +22,11 @@ int main() {
     RandomWalker walker(geom);
     // Set starting position (z, y, x) in meters
     Position start_pos = {5.5e-4, 0.005, 0.015};
-    std::cout << "GT "<< geom.get_temperature_at(start_pos) << std::endl;
     // Run simulations (e.g., N=1000 paths) to estimate the temperature
-    double result = walker.simulate_temperature(start_pos, 100);
+    double result = walker.simulate_temperature(start_pos, 1000);
     std::cout << "Result (mean temperature): " << result << std::endl;
+
+
 
     return 0;
 }

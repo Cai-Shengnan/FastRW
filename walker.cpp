@@ -22,7 +22,6 @@ double RandomWalker::simulate_temperature(const Position& x0_meter, int N, int n
         return 0.0;
     }
 
-    const double gt = geom.get_temperature_at(x0_meter);  // PDE预测温度 mu0
     std::vector<double> samples;
     samples.reserve(N);
 
