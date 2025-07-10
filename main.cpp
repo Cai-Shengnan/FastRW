@@ -1,5 +1,6 @@
 #include <iostream>
 #include <numeric>
+#include <vector>
 #include "geometry.h"
 #include "walker.h"
 
@@ -20,11 +21,20 @@ int main() {
     geom.load_temperature_field_from_file("/Users/zxwang/Documents/codes/ResRW/RR_00000_temp.bin");
     // Initialize RandomWalker with the geometry
     RandomWalker walker(geom);
-    // Set starting position (z, y, x) in meters
-    Position start_pos = {5.5e-4, 0.005, 0.015};
-    // Run simulations (e.g., N=1000 paths) to estimate the temperature
-    double result = walker.simulate_temperature(start_pos, 1000);
-    std::cout << "Result (mean temperature): " << result << std::endl;
+    // Define several points inside the heat source region
+    std::vector<Position> points = {
+        {5.5e-4, 0.005, 0.015},
+        {5.5e-4, 0.01, 0.005},
+        {5.5e-4, 0.015, 0.015}
+    };
+
+    auto stats = walker.simulate_temperature_multi(points, 500);
+    for(size_t i = 0; i < stats.size(); ++i) {
+        const auto& s = stats[i];
+        std::cout << "Point " << i << ": normal(" << s.normal_count << ") mean=" << s.normal_mean
+                  << ", pass(" << s.pass_count << ") mean=" << s.pass_mean
+                  << ", total(" << s.total_count << ") mean=" << s.total_mean << std::endl;
+    }
 
 
 

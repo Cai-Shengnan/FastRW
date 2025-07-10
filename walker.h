@@ -4,10 +4,38 @@
 #include <vector>
 #include <array>
 #include <string>
+#include <unordered_map>
 #include "geometry.h"
 
 // Define a type for 3D position (z, y, x) coordinates in meters
 using Position = std::array<double, 3>;
+
+struct GridIndex {
+    int iz;
+    int iy;
+    int ix;
+    bool operator==(const GridIndex& other) const {
+        return iz == other.iz && iy == other.iy && ix == other.ix;
+    }
+};
+
+struct GridIndexHash {
+    std::size_t operator()(const GridIndex& idx) const {
+        std::size_t h1 = std::hash<int>()(idx.iz);
+        std::size_t h2 = std::hash<int>()(idx.iy);
+        std::size_t h3 = std::hash<int>()(idx.ix);
+        return h1 ^ (h2 << 1) ^ (h3 << 2);
+    }
+};
+
+struct MultiPointStats {
+    int normal_count;
+    double normal_mean;
+    int pass_count;
+    double pass_mean;
+    int total_count;
+    double total_mean;
+};
 
 class RandomWalker {
 public:
@@ -18,8 +46,14 @@ public:
     // Run N random walk simulations to estimate temperature (expected value).
     // Returns the average result of simulate_single_path over N runs.
     // Optionally uses multiple threads for parallel simulation.
-    double simulate_temperature(const Position& x0_meter, int N = 5000, 
+    double simulate_temperature(const Position& x0_meter, int N = 5000,
                                 int num_workers = -1, int print_interval = 100);
+
+    // Run N random walks for each position in start_points and reuse paths
+    // that pass through other target points to estimate multiple temperatures
+    std::vector<MultiPointStats> simulate_temperature_multi(
+        const std::vector<Position>& start_points, int N = 5000,
+        int num_workers = -1, int print_interval = 100);
 
     // Simulate a single random walk path.
     // Returns a tuple: (temperature contribution, boundary_position where the
@@ -34,6 +68,13 @@ private:
 
     // Internal function for simulate_temperature parallelization (reseeds RNG for each call if needed).
     std::tuple<double, std::string, int> simulate_single_path_wrapper(const Position& x0_meter);
+
+    // Simulate a single path and record intermediate estimates when passing
+    // through target grid points.
+    std::tuple<double, std::vector<std::pair<int,double>>, int>
+    simulate_single_path_record(
+        const Position& x0_meter,
+        const std::unordered_map<GridIndex,int,GridIndexHash>& target_map);
 
     // Helper functions corresponding to internal methods in the Python code:
     // Escape from Robin boundary region: compute contribution and update e_hat.
