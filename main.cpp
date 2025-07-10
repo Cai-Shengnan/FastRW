@@ -21,7 +21,7 @@ int main() {
     geom.load_temperature_field_from_file("RR_0000_temp.bin");
     // Initialize RandomWalker with the geometry
     // Use smaller max_steps to keep example runtime short
-    RandomWalker walker(geom, 1000);
+    RandomWalker walker(geom);
     // Define several points inside the heat source region
     std::vector<Position> points = {
         {5.5e-4, 0.0051, 0.0151},
@@ -29,7 +29,7 @@ int main() {
         {5.5e-4, 0.0151, 0.0051}
     };
 
-    auto stats = walker.simulate_temperature_multi(points, 1);
+    auto stats = walker.simulate_temperature_multi(points, 100);
     for(size_t i = 0; i < stats.size(); ++i) {
         const auto& s = stats[i];
         std::cout << "Point " << i << ": direct_mean=" << s.normal_mean

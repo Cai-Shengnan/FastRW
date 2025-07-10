@@ -121,6 +121,8 @@ std::vector<MultiPointStats> RandomWalker::simulate_temperature_multi(
     // store linear system rows for least squares
     std::vector<std::vector<double>> A_rows;
     std::vector<double> b_rows;
+    double residual_total = 0.0;
+    int residual_count = 0;
 
     std::unordered_map<GridIndex,int,GridIndexHash> target_map;
     for(int i = 0; i < k; ++i) {
@@ -152,12 +154,20 @@ std::vector<MultiPointStats> RandomWalker::simulate_temperature_multi(
                 prow[p.target_index] = -p.e_hat;
                 A_rows.push_back(prow);
                 b_rows.push_back(p.t_sum);
+                double Tx = geom.get_temperature_at(start_points[idx]);
+                double Ty = geom.get_temperature_at(start_points[p.target_index]);
+                residual_total += Tx - p.e_hat * Ty - p.t_sum;
+                residual_count++;
             }
         }
     }
 
     auto sim_end = std::chrono::high_resolution_clock::now();
     double sim_time = std::chrono::duration<double>(sim_end - sim_start).count();
+
+    double residual_mean = residual_count > 0 ? residual_total / residual_count : 0.0;
+    std::cout << "Mean residual T(X)-e_hat*T(Y)-t_sum: "
+              << residual_mean << " residual_count " << residual_count << std::endl;
 
     auto ls_start = std::chrono::high_resolution_clock::now();
     std::vector<double> ls_result = solve_least_squares(A_rows, b_rows);
