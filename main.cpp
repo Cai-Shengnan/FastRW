@@ -17,7 +17,7 @@ int main() {
         1e-8, 1.5 * 5e-7, 1.5 * 5e-7,
         "/Users/zxwang/Documents/codes/ResRW/RR_0000_power.bin"
     );
-    geom.load_temperature_field_from_file("/Users/zxwang/Documents/codes/ResRW/RR_0000_temp.bin");
+    geom.load_temperature_field_from_file("/Users/zxwang/Documents/codes/ResRW/RR_00000_temp.bin");
     // Initialize RandomWalker with the geometry
     RandomWalker walker(geom);
     // Set starting position (z, y, x) in meters
