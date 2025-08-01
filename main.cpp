@@ -16,23 +16,32 @@ int main() {
         GeometryConfig::BoundaryType::Neumann,
         0.0,
         1e-8, 1.5 * 5e-7, 1.5 * 5e-7,
-        "RR_0000_power.bin"
+        "RR_00084_power.bin"
     );
-    geom.load_temperature_field_from_file("RR_0000_temp.bin");
+    geom.load_temperature_field_from_file("RR_00084_temp.bin");
     // Initialize RandomWalker with the geometry
     // Use smaller max_steps to keep example runtime short
     RandomWalker walker(geom);
     // Define several points inside the heat source region
-    std::vector<Position> points = {
-        {5.5e-4, 0.0051, 0.0151},
-        {5.5e-4, 0.0101, 0.0101},
-        {5.5e-4, 0.0151, 0.0051}
-    };
+    std::vector<Position> points = {};
 
-    auto stats = walker.simulate_temperature_multi(points, 100);
+    for (int i = 0; i < 1; i++){
+        double ix = geom.xy_resolution * i + 5e-3;
+        for (int j = 0; j < 1; j++){
+            double iy = geom.xy_resolution * j + 5e-3;
+            Position cur_p = Position({5.5e-4, ix, iy});
+            points.push_back(cur_p);
+        }
+    }
+    
+    std::cout<< "Total Point Number = " << points.size() << std::endl;
+
+
+    auto stats = walker.simulate_temperature_multi(points, 1000);
     for(size_t i = 0; i < stats.size(); ++i) {
         const auto& s = stats[i];
-        std::cout << "Point " << i << ": direct_mean=" << s.normal_mean
+        const auto& p = points[i];
+        std::cout << "Point " << i << ": direct_mean=" << s.normal_mean << " GT = " << geom.get_temperature_at(p)
                  << std::endl;
     }
 

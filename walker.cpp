@@ -10,16 +10,57 @@
 #include <iomanip>
 #include <unordered_map>
 #include <chrono>
-
+#include <fstream>
+#include "json.hpp"
+using json = nlohmann::json;
 // Thread-local random number generator (Mersenne Twister) seeded with a random device
 static thread_local std::mt19937 rng((std::random_device())());
+
+
+
+
+void write_constraints_to_json(
+    const std::vector<std::vector<PassSample>>& all_pass_samples,
+    int M, int N, const std::vector<std::vector<double>>& obs_data,
+    const std::string& filename = "data.json"
+) {
+    std::vector<int> i_k;
+    std::vector<int> j_k;
+    std::vector<double> alpha_k;
+    std::vector<double> b_k;
+
+    for (int i = 0; i < all_pass_samples.size(); ++i) {
+        for (const auto& ps : all_pass_samples[i]) {
+            i_k.push_back(i + 1);  // Stan uses 1-based indexing
+            j_k.push_back(ps.target_index + 1);
+            alpha_k.push_back(ps.e_hat);
+            b_k.push_back(ps.t_sum);
+        }
+    }
+
+    json j;
+    j["M"] = M;
+    j["N"] = N;
+    j["K"] = static_cast<int>(i_k.size());
+
+    j["i_k"] = i_k;
+    j["j_k"] = j_k;
+    j["alpha_k"] = alpha_k;
+    j["b_k"] = b_k;
+
+    // 将 obs_data 转换为二维数组
+    j["obs_data"] = obs_data;
+
+    std::ofstream out(filename);
+    out << std::setw(2) << j << std::endl;
+}
+
 
 // RandomWalker constructor
 RandomWalker::RandomWalker(GeometryConfig& geometry_config, double max_steps_, double eps_, double delta_x_)
 : geom(geometry_config), max_steps(max_steps_), eps(eps_), delta_x(delta_x_) {
     // No additional initialization needed
 }
-
 
 
 
@@ -96,70 +137,63 @@ std::vector<MultiPointStats> RandomWalker::simulate_temperature_multi(
     const std::vector<Position>& start_points, int N,
     int num_workers, int print_interval) {
 
-    int k = static_cast<int>(start_points.size());
-    if (k == 0 || N <= 0) return {};
+    int M = static_cast<int>(start_points.size());
+    if (M == 0 || N <= 0) return {};
 
-    std::vector<double> normal_sums(k, 0.0);
-    std::vector<int> normal_counts(k, 0);
+    if (num_workers <= 0) {
+        num_workers = static_cast<int>(std::thread::hardware_concurrency());
+        if (num_workers < 1) num_workers = 1;  // fallback to 1 if system returns 0
+    }
+    
 
-    double residual_total = 0.0;
-    int residual_count = 0;
+    std::vector<std::vector<double>> obs_data(N, std::vector<double>(M, 0.0));
+    std::vector<std::vector<PassSample>> all_pass_samples(M);
 
     std::unordered_map<GridIndex, int, GridIndexHash> target_map;
-    for (int i = 0; i < k; ++i) {
+    for (int i = 0; i < M; ++i) {
         int iz = static_cast<int>(std::floor(start_points[i][0] / geom.z_resolution));
         int iy = static_cast<int>(std::floor(start_points[i][1] / geom.xy_resolution));
         int ix = static_cast<int>(std::floor(start_points[i][2] / geom.xy_resolution));
         target_map[{iz, iy, ix}] = i;
     }
 
+    std::atomic<int> next_task(0);
+    int total_tasks = M * N;
+    std::mutex mtx;
+    std::cout << "Launching simulation with " << num_workers << " threads" << std::endl;
+
     auto sim_start = std::chrono::high_resolution_clock::now();
 
-    std::mutex mtx;
-    int total_tasks = k * N;
-    std::atomic<int> next_task(0);
-
-    int workers = (num_workers <= 0 ? static_cast<int>(std::thread::hardware_concurrency()) : num_workers);
-    if (workers < 1) workers = 1;
-    std::cout << "Number of workers: " << workers << std::endl;
-
     std::vector<std::thread> threads;
-    for (int t = 0; t < workers; ++t) {
+    for (int t = 0; t < num_workers; ++t) {
         threads.emplace_back([&]() {
-
-            std::vector<double> local_sums(k, 0.0);
-            std::vector<int> local_counts(k, 0);
-            double local_residual = 0.0;
-            int local_r_count = 0;
+            std::vector<std::vector<PassSample>> thread_pass_samples(M);
+            std::vector<std::vector<double>> thread_obs_data(N, std::vector<double>(M, 0.0));
 
             while (true) {
-                int task_index = next_task.fetch_add(1);
-                if (task_index >= total_tasks) break;
+                int task_idx = next_task.fetch_add(1);
+                if (task_idx >= total_tasks) break;
 
-                int idx = task_index / N; // start point index
-                auto result = simulate_single_path_record(start_points[idx], target_map);
-                double value = std::get<0>(result);
+                int i = task_idx / N;
+                int n = task_idx % N;
+
+                auto result = simulate_single_path_record(start_points[i], target_map);
+                double T_val = std::get<0>(result);
                 const auto& passes = std::get<1>(result);
-
-                local_sums[idx] += value;
-                local_counts[idx]++;
-
-                for (const auto& p : passes) {
-
-                    double Tx = geom.get_temperature_at(start_points[idx]);
-                    double Ty = geom.get_temperature_at(start_points[p.target_index]);
-                    local_residual += Tx - p.e_hat * Ty - p.t_sum;
-                    local_r_count++;
-                }
+                thread_obs_data[n][i] = T_val;
+                thread_pass_samples[i].insert(thread_pass_samples[i].end(), passes.begin(), passes.end());
             }
 
             std::lock_guard<std::mutex> lock(mtx);
-            for (int i = 0; i < k; ++i) {
-                normal_sums[i] += local_sums[i];
-                normal_counts[i] += local_counts[i];
+            for (int i = 0; i < M; ++i) {
+                all_pass_samples[i].insert(all_pass_samples[i].end(),
+                                           thread_pass_samples[i].begin(), thread_pass_samples[i].end());
             }
-            residual_total += local_residual;
-            residual_count += local_r_count;
+            for (int n = 0; n < N; ++n) {
+                for (int i = 0; i < M; ++i) {
+                    obs_data[n][i] += thread_obs_data[n][i];
+                }
+            }
         });
     }
 
@@ -168,18 +202,23 @@ std::vector<MultiPointStats> RandomWalker::simulate_temperature_multi(
     }
 
     auto sim_end = std::chrono::high_resolution_clock::now();
-    double sim_time = std::chrono::duration<double>(sim_end - sim_start).count();
+    std::cout << "Simulation complete in "
+              << std::chrono::duration<double>(sim_end - sim_start).count()
+              << " seconds." << std::endl;
 
-    double residual_mean = residual_count > 0 ? residual_total / residual_count : 0.0;
-    std::cout << "Mean residual T(X)-e_hat*T(Y)-t_sum: "
-              << residual_mean << " residual_count " << residual_count << std::endl;
+    // 写入 JSON 文件
+    write_constraints_to_json(all_pass_samples, M, N, obs_data);
 
-    std::cout << "Random walk simulation time: " << sim_time << " s" << std::endl;
-
-    std::vector<MultiPointStats> stats(k);
-    for (int i = 0; i < k; ++i) {
-        double normal_mean = normal_counts[i] > 0 ? normal_sums[i] / normal_counts[i] : 0.0;
-        stats[i] = {normal_counts[i], normal_mean};
+    // 构造返回值
+    std::vector<MultiPointStats> stats(M);
+    for (int i = 0; i < M; ++i) {
+        double sum = 0.0;
+        int count = 0;
+        for (int n = 0; n < N; ++n) {
+            sum += obs_data[n][i];
+            count++;
+        }
+        stats[i] = {count, count > 0 ? sum / count : 0.0};
     }
     return stats;
 }
