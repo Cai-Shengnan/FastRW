@@ -1,9 +1,3 @@
-cd /Users/zxwang/Documents/codes/ResRW
-rm -rf build
-mkdir build && cd build
-cmake ..
-make -j
+./model sample data file=data.json output file=output.csv
 
-DYLD_LIBRARY_PATH=../osqp-eigen/build ./random_walker
-
-cd /Users/zxwang/Documents/codes/ResRW
+./cmdstan/bin/stansummary output.csv --sig_figs=4 
