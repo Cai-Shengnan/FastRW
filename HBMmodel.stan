@@ -39,7 +39,7 @@ model {
   // 2) 约束观测的似然
   for (k in 1:K)
     b_k[k] ~ normal( X[i_k[k]] - alpha_k[k] * X[j_k[k]],
-                     var0[i_k[k]] );
+                     var0[i_k[k]] -  alpha_k[k] * alpha_k[k] * var0[j_k[k]] );
 }
 
 

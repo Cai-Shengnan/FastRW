@@ -148,6 +148,8 @@ std::vector<MultiPointStats> RandomWalker::simulate_temperature_multi(
 
     std::vector<std::vector<double>> obs_data(N, std::vector<double>(M, 0.0));
     std::vector<std::vector<PassSample>> all_pass_samples(M);
+    // 新增：每个起点累计步数（全局）
+    std::vector<long long> total_steps_per_point(M, 0);
 
     std::unordered_map<GridIndex, int, GridIndexHash> target_map;
     for (int i = 0; i < M; ++i) {
@@ -169,6 +171,7 @@ std::vector<MultiPointStats> RandomWalker::simulate_temperature_multi(
         threads.emplace_back([&]() {
             std::vector<std::vector<PassSample>> thread_pass_samples(M);
             std::vector<std::vector<double>> thread_obs_data(N, std::vector<double>(M, 0.0));
+            std::vector<long long> thread_steps_per_point(M, 0);
 
             while (true) {
                 int task_idx = next_task.fetch_add(1);
@@ -180,14 +183,17 @@ std::vector<MultiPointStats> RandomWalker::simulate_temperature_multi(
                 auto result = simulate_single_path_record(start_points[i], target_map);
                 double T_val = std::get<0>(result);
                 const auto& passes = std::get<1>(result);
+                int step_count = std::get<2>(result);
                 thread_obs_data[n][i] = T_val;
                 thread_pass_samples[i].insert(thread_pass_samples[i].end(), passes.begin(), passes.end());
+                thread_steps_per_point[i] += step_count;
             }
 
             std::lock_guard<std::mutex> lock(mtx);
             for (int i = 0; i < M; ++i) {
                 all_pass_samples[i].insert(all_pass_samples[i].end(),
                                            thread_pass_samples[i].begin(), thread_pass_samples[i].end());
+                total_steps_per_point[i] += thread_steps_per_point[i];
             }
             for (int n = 0; n < N; ++n) {
                 for (int i = 0; i < M; ++i) {
@@ -218,7 +224,9 @@ std::vector<MultiPointStats> RandomWalker::simulate_temperature_multi(
             sum += obs_data[n][i];
             count++;
         }
-        stats[i] = {count, count > 0 ? sum / count : 0.0};
+        double normal_mean = (count > 0) ? (sum / count) : 0.0;
+        double avg_steps = (N > 0) ? (static_cast<double>(total_steps_per_point[i]) / N) : 0.0;
+        stats[i] = { count, normal_mean, avg_steps };
     }
     return stats;
 }
@@ -246,7 +254,7 @@ std::tuple<double, std::string, int> RandomWalker::simulate_single_path(const Po
             if(region == "heat_source" || region == "virtual_top" || region == "virtual_bottom") {
                 double reward = (region == "heat_source") ? get_heat_reward(pos) : 0.0;
                 T_i[0] += e_hat * reward;
-                if(e_hat < 0.1 && region == "heat_source" ){
+                if(e_hat < 0.01 && region == "heat_source" ){
                     T_i[1] += e_hat * geom.get_temperature_at(pos);
                     break;
                 }
@@ -369,7 +377,7 @@ RandomWalker::simulate_single_path_record(
             if(region == "heat_source" || region == "virtual_top" || region == "virtual_bottom") {
                 double reward = (region == "heat_source") ? get_heat_reward(pos) : 0.0;
                 T_i[0] += e_hat * reward;
-                if(e_hat < 0.1 && region == "heat_source" ){
+                if(e_hat < 0.01 && region == "heat_source" ){
                     T_i[1] += e_hat * geom.get_temperature_at(pos);
                     break;
                 }

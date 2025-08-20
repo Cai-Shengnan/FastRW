@@ -37,12 +37,13 @@ struct PassSample {
 struct MultiPointStats {
     int normal_count;    // number of direct path samples
     double normal_mean; // mean temperature from direct samples
+    double avg_steps;     // average number of steps per path (new)
 };
 
 class RandomWalker {
 public:
     // Constructor: initializes RandomWalker with given geometry configuration and parameters.
-    RandomWalker(GeometryConfig& geometry_config, double max_steps = 6e6, 
+    RandomWalker(GeometryConfig& geometry_config, double max_steps = 1e7, 
                  double eps = 5e-4, double delta_x = 5e-7);
 
     // Run N random walk simulations to estimate temperature (expected value).
