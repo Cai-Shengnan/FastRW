@@ -1,0 +1,58 @@
+{
+  "case_name": "case2_4core",
+  "power_map": "4-core",
+  "geometry": {
+    "x_size": 0.02,
+    "y_size": 0.02,
+    "top_thickness": 0.00025,
+    "middle_thickness": 0.0001,
+    "bottom_thickness": 0.001,
+    "xy_resolution": 0.0002,
+    "z_resolution": 0.00002,
+    "ambient_temperature": 293.15,
+    "source_conductivity": 125.0,
+    "medium_conductivity": 395.0
+  },
+  "boundary": {
+    "top": {
+      "type": "Robin",
+      "param": 8700.0
+    },
+    "bottom": {
+      "type": "Robin",
+      "param": 8700.0
+    },
+    "lateral": {
+      "type": "Neumann",
+      "param": 0.0
+    },
+    "epsilon": {
+      "dirichlet": 1e-8,
+      "neumann": 7.5e-7,
+      "robin": 7.5e-7
+    }
+  },
+  "data": {
+    "power_density_path": "../data/4-cores/4.48M/power.bin",
+    "ground_truth_path": "../data/4-cores/4.48M/temp.bin"
+  },
+  "walker": {
+    "max_steps": 5e7,
+    "cutoff_weight": 0.03,
+    "delta_x": 5e-7,
+    "use_tail_correction": true
+  },
+  "query_grid": {
+    "x_indices": [10, 20, 30, 40],
+    "y_indices": [10, 20, 30, 40]
+  },
+  "run": {
+    "num_samples": 400,
+    "num_workers": -1
+  },
+  "output": {
+    "directory": "../outputs",
+    "csv": "FastRw.csv",
+    "constraints": "data.json"
+  }
+}

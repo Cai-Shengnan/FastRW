@@ -1,0 +1,6 @@
+name: FastRW
+channels:
+  - conda-forge
+dependencies:
+  - cmake>=3.24
+  - ninja

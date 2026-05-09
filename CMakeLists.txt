@@ -1,25 +1,48 @@
 cmake_minimum_required(VERSION 3.14)
-project(RandomWalker)
+project(ResRW LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ✅ 显式开启 pthread 支持
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
+find_package(Threads REQUIRED)
 
-# === 1. Eigen ===
-include_directories(${CMAKE_SOURCE_DIR}/eigen-3.4.0)
+add_executable(random_walker
+    src/main.cpp
+    src/geometry.cpp
+    src/simulation_config.cpp
+    src/walker.cpp
+)
 
-# === 2. OSQP ===
-include_directories(${CMAKE_SOURCE_DIR}/osqp/include)
-link_directories(${CMAKE_SOURCE_DIR}/osqp/build/out)
+target_include_directories(random_walker PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/third_party/nlohmann
+)
 
-# === 3. OSQP-Eigen ===
-include_directories(${CMAKE_SOURCE_DIR}/osqp-eigen/include)
-link_directories(${CMAKE_SOURCE_DIR}/osqp-eigen/build)
+target_link_libraries(random_walker PRIVATE Threads::Threads)
 
-# === 4. Source ===
-add_executable(random_walker main.cpp geometry.cpp walker.cpp)
+if(APPLE)
+    enable_language(OBJCXX)
 
-# === 5. Link libraries ===
-target_link_libraries(random_walker OsqpEigen osqp)
+    add_executable(random_walker_metal
+        src/main_metal.cpp
+        src/geometry.cpp
+        src/simulation_config.cpp
+        src/walker_metal.mm
+    )
+
+    target_include_directories(random_walker_metal PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/third_party/nlohmann
+    )
+
+    target_compile_options(random_walker_metal PRIVATE
+        "$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>"
+    )
+
+    target_link_libraries(random_walker_metal PRIVATE
+        Threads::Threads
+        "-framework Foundation"
+        "-framework Metal"
+    )
+endif()
