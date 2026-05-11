@@ -139,6 +139,6 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "Results saved to " << csv_path << std::endl;
-    std::cout << "Direct-observation Stan data saved to " << constraints_path << std::endl;
+    std::cout << "Stan data saved to " << constraints_path << std::endl;
     return 0;
 }

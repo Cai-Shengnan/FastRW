@@ -90,9 +90,8 @@ cmake --build build --parallel
 
 This repository also includes a Metal compute backend for Apple Silicon Macs.
 The GPU executable runs direct random-walk estimates and writes the same CSV
-shape as the CPU executable. It also writes `data.json` with direct
-observations only (`K = 0`), so pass-through constraints are intentionally not
-collected on GPU.
+shape as the CPU executable. It also writes CPU-compatible `data.json`
+observations and pass-through constraints for downstream Stan workflows.
 
 Create the Anaconda environment:
 

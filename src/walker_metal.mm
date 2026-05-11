@@ -27,6 +27,16 @@ constexpr int kRobinModeCurrent = 0;
 constexpr int kRobinModeEvent = 1;
 constexpr int kRobinModeHit = 2;
 constexpr int kDiagnosticStride = 28;
+constexpr int kMaxPassesPerPath = 1024;
+
+struct MetalPassRecordHost {
+    int target_index;
+    float t_sum;
+    float e_hat;
+};
+
+static_assert(sizeof(MetalPassRecordHost) == 12,
+              "MetalPassRecordHost must match the Metal PassRecord layout.");
 
 struct MetalGeometryHost {
     int nx;
@@ -95,10 +105,11 @@ constant int BC_ROBIN = 2;
 	constant int BC_POS_BOTTOM = 1;
 	constant int TAIL_MODE_GT = 0;
 	constant int TAIL_MODE_NONE = 1;
-	constant int ROBIN_MODE_CURRENT = 0;
-	constant int ROBIN_MODE_EVENT = 1;
-	constant int ROBIN_MODE_HIT = 2;
-	constant int DIAG_STRIDE = 28;
+		constant int ROBIN_MODE_CURRENT = 0;
+		constant int ROBIN_MODE_EVENT = 1;
+		constant int ROBIN_MODE_HIT = 2;
+		constant int DIAG_STRIDE = 28;
+		constant int MAX_PASS_RECORDS_PER_PATH = 1024;
 
 constant float TWO_PI = 6.28318530717958647692f;
 
@@ -148,6 +159,12 @@ struct MetalGeometry {
 	    int point_count;
 	    int samples_per_point;
 	    uint seed;
+};
+
+struct PassRecord {
+    int target_index;
+    float t_sum;
+    float e_hat;
 };
 
 struct PathState {
@@ -535,6 +552,10 @@ kernel void simulate_paths_kernel(
 	    device float* out [[buffer(4)]],
 	    device int* steps [[buffer(5)]],
 	    device float* diagnostics [[buffer(6)]],
+	    device const int* target_indices [[buffer(7)]],
+	    device PassRecord* pass_records [[buffer(8)]],
+	    device int* pass_counts [[buffer(9)]],
+	    device int* pass_overflows [[buffer(10)]],
 	    uint tid [[thread_position_in_grid]]
 	) {
     int M = g.point_count;
@@ -591,6 +612,9 @@ kernel void simulate_paths_kernel(
 	    s.virtual_bottom_visit_count = 0;
 	    s.heat_pending_robin_unweighted_reward = 0.0f;
 	    s.rng = pcg_hash(g.seed ^ (tid * 747796405u + 2891336453u));
+	    int last_record = 0;
+	    int pass_count = 0;
+	    int pass_overflow = 0;
 
     while (s.step_count < g.max_steps) {
         int region = region_by_coord(g, s.z);
@@ -603,6 +627,34 @@ kernel void simulate_paths_kernel(
             if (region == REGION_HEAT || region == REGION_VIRTUAL_TOP || region == REGION_VIRTUAL_BOTTOM) {
                 if (region == REGION_HEAT) {
 	                    float heat_reward = get_heat_reward(g, power, s);
+	                    if (s.step_count - last_record > 1000 && fabs(1.0f - s.e_hat) > 0.1f) {
+	                        int iz = static_cast<int>(floor(s.z / g.z_resolution));
+	                        int iy = static_cast<int>(floor(s.y / g.xy_resolution));
+	                        int ix = static_cast<int>(floor(s.x / g.xy_resolution));
+	                        int target_index = -1;
+	                        for (int target = 0; target < M; ++target) {
+	                            int target_base = target * 3;
+	                            if (iz == target_indices[target_base + 0] &&
+	                                iy == target_indices[target_base + 1] &&
+	                                ix == target_indices[target_base + 2]) {
+	                                target_index = target;
+	                            }
+	                        }
+	                        if (target_index >= 0) {
+	                            int record_index = pass_count;
+	                            if (record_index < MAX_PASS_RECORDS_PER_PATH) {
+	                                uint out_index = tid * static_cast<uint>(MAX_PASS_RECORDS_PER_PATH)
+	                                               + static_cast<uint>(record_index);
+	                                pass_records[out_index].target_index = target_index;
+	                                pass_records[out_index].t_sum = s.T0 + s.T1 + s.T2 + s.T3 + s.e_hat * heat_reward;
+	                                pass_records[out_index].e_hat = s.e_hat;
+	                            } else {
+	                                pass_overflow = 1;
+	                            }
+	                            pass_count += 1;
+	                            last_record = s.step_count;
+	                        }
+	                    }
 	                    add_compensated(s.T0, s.C0, s.e_hat * heat_reward);
 	                    add_compensated(s.T0_unweighted, s.C0_unweighted, heat_reward);
 	                    add_compensated(s.heat_e_hat_sum, s.C_heat_e_hat_sum, s.e_hat);
@@ -732,7 +784,9 @@ kernel void simulate_paths_kernel(
 	    diagnostics[diag_base + 25] = s.heat_pending_robin_unweighted_reward;
 	    diagnostics[diag_base + 26] = static_cast<float>(s.virtual_top_visit_count);
 	    diagnostics[diag_base + 27] = static_cast<float>(s.virtual_bottom_visit_count);
-	}
+	    pass_counts[tid] = min(pass_count, MAX_PASS_RECORDS_PER_PATH);
+	    pass_overflows[tid] = pass_overflow;
+		}
 )MSL";
 
 std::string ns_error_message(NSError* error) {
@@ -796,20 +850,35 @@ double gt_bilinear_xy_lookup(const GeometryConfig& geom, const Position& p) {
     return vx0 * (1.0 - ty) + vx1 * ty;
 }
 
-void write_direct_constraints_to_json(
+void write_constraints_to_json(
+    const std::vector<std::vector<PassSample>>& all_pass_samples,
     int M,
     int N,
     const std::vector<std::vector<double>>& obs_data,
     const std::string& filename
 ) {
+    std::vector<int> i_k;
+    std::vector<int> j_k;
+    std::vector<double> alpha_k;
+    std::vector<double> b_k;
+
+    for (int i = 0; i < static_cast<int>(all_pass_samples.size()); ++i) {
+        for (const auto& ps : all_pass_samples[i]) {
+            i_k.push_back(i + 1);
+            j_k.push_back(ps.target_index + 1);
+            alpha_k.push_back(ps.e_hat);
+            b_k.push_back(ps.t_sum);
+        }
+    }
+
     json j;
     j["M"] = M;
     j["N"] = N;
-    j["K"] = 0;
-    j["i_k"] = std::vector<int>{};
-    j["j_k"] = std::vector<int>{};
-    j["alpha_k"] = std::vector<double>{};
-    j["b_k"] = std::vector<double>{};
+    j["K"] = static_cast<int>(i_k.size());
+    j["i_k"] = i_k;
+    j["j_k"] = j_k;
+    j["alpha_k"] = alpha_k;
+    j["b_k"] = b_k;
     j["obs_data"] = obs_data;
 
     std::filesystem::path output_path(filename);
@@ -1111,10 +1180,14 @@ struct RandomWalkerMetal::Impl {
 
 	        @autoreleasepool {
 	            std::vector<float> points(static_cast<size_t>(M) * 3, 0.0f);
+	            std::vector<int> target_indices(static_cast<size_t>(M) * 3, 0);
 	            for (int i = 0; i < M; ++i) {
 	                points[static_cast<size_t>(i) * 3 + 0] = static_cast<float>(start_points[i][0]);
 	                points[static_cast<size_t>(i) * 3 + 1] = static_cast<float>(start_points[i][1]);
 	                points[static_cast<size_t>(i) * 3 + 2] = static_cast<float>(start_points[i][2]);
+	                target_indices[static_cast<size_t>(i) * 3 + 0] = static_cast<int>(std::floor(start_points[i][0] / geom.z_resolution));
+	                target_indices[static_cast<size_t>(i) * 3 + 1] = static_cast<int>(std::floor(start_points[i][1] / geom.xy_resolution));
+	                target_indices[static_cast<size_t>(i) * 3 + 2] = static_cast<int>(std::floor(start_points[i][2] / geom.xy_resolution));
 	            }
 
 	            unsigned int seed = configured_seed.value_or(static_cast<unsigned int>(
@@ -1124,6 +1197,12 @@ struct RandomWalkerMetal::Impl {
 	                                                              options:MTLResourceStorageModeShared];
 	            if (points_buffer == nil) {
 	                throw std::runtime_error("Failed to allocate Metal points buffer.");
+	            }
+	            id<MTLBuffer> target_indices_buffer = [device newBufferWithBytes:target_indices.data()
+	                                                                       length:target_indices.size() * sizeof(int)
+	                                                                      options:MTLResourceStorageModeShared];
+	            if (target_indices_buffer == nil) {
+	                throw std::runtime_error("Failed to allocate Metal target-index buffer.");
 	            }
 
 	            NSUInteger max_threads = [pipeline maxTotalThreadsPerThreadgroup];
@@ -1137,9 +1216,11 @@ struct RandomWalkerMetal::Impl {
 	            constexpr int max_samples_per_dispatch = 100;
 	            const int dispatch_count = (N + max_samples_per_dispatch - 1) / max_samples_per_dispatch;
 		            std::vector<std::vector<double>> obs_data(N, std::vector<double>(M, 0.0));
+		            std::vector<std::vector<PassSample>> all_pass_samples(M);
 		            std::vector<double> sums(M, 0.0);
 		            std::vector<long long> step_sums(M, 0);
 		            std::vector<double> diagnostic_sums(static_cast<size_t>(M) * kDiagnosticStride, 0.0);
+		            long long pass_overflow_paths = 0;
 	            auto sim_start = std::chrono::high_resolution_clock::now();
 	            for (int sample_offset = 0; sample_offset < N; sample_offset += max_samples_per_dispatch) {
 	                const int batch_samples = std::min(max_samples_per_dispatch, N - sample_offset);
@@ -1152,14 +1233,22 @@ struct RandomWalkerMetal::Impl {
 	                id<MTLBuffer> geometry_buffer = [device newBufferWithBytes:&g
 	                                                                     length:sizeof(MetalGeometryHost)
 	                                                                    options:MTLResourceStorageModeShared];
-	                id<MTLBuffer> out_buffer = [device newBufferWithLength:static_cast<NSUInteger>(batch_total) * sizeof(float)
+		                id<MTLBuffer> out_buffer = [device newBufferWithLength:static_cast<NSUInteger>(batch_total) * sizeof(float)
 	                                                               options:MTLResourceStorageModeShared];
 		                id<MTLBuffer> steps_buffer = [device newBufferWithLength:static_cast<NSUInteger>(batch_total) * sizeof(int)
 		                                                                 options:MTLResourceStorageModeShared];
 		                id<MTLBuffer> diagnostics_buffer = [device newBufferWithLength:static_cast<NSUInteger>(batch_total) * kDiagnosticStride * sizeof(float)
 		                                                                       options:MTLResourceStorageModeShared];
+		                id<MTLBuffer> pass_records_buffer = [device newBufferWithLength:static_cast<NSUInteger>(batch_total) * kMaxPassesPerPath * sizeof(MetalPassRecordHost)
+		                                                                         options:MTLResourceStorageModeShared];
+		                id<MTLBuffer> pass_counts_buffer = [device newBufferWithLength:static_cast<NSUInteger>(batch_total) * sizeof(int)
+		                                                                        options:MTLResourceStorageModeShared];
+		                id<MTLBuffer> pass_overflows_buffer = [device newBufferWithLength:static_cast<NSUInteger>(batch_total) * sizeof(int)
+		                                                                           options:MTLResourceStorageModeShared];
 
-		                if (geometry_buffer == nil || out_buffer == nil || steps_buffer == nil || diagnostics_buffer == nil) {
+		                if (geometry_buffer == nil || out_buffer == nil || steps_buffer == nil ||
+		                    diagnostics_buffer == nil || pass_records_buffer == nil ||
+		                    pass_counts_buffer == nil || pass_overflows_buffer == nil) {
 		                    throw std::runtime_error("Failed to allocate one or more Metal simulation buffers.");
 		                }
 
@@ -1173,6 +1262,10 @@ struct RandomWalkerMetal::Impl {
 		                [encoder setBuffer:out_buffer offset:0 atIndex:4];
 		                [encoder setBuffer:steps_buffer offset:0 atIndex:5];
 		                [encoder setBuffer:diagnostics_buffer offset:0 atIndex:6];
+		                [encoder setBuffer:target_indices_buffer offset:0 atIndex:7];
+		                [encoder setBuffer:pass_records_buffer offset:0 atIndex:8];
+		                [encoder setBuffer:pass_counts_buffer offset:0 atIndex:9];
+		                [encoder setBuffer:pass_overflows_buffer offset:0 atIndex:10];
 
 	                MTLSize grid_size = MTLSizeMake(static_cast<NSUInteger>(batch_total), 1, 1);
 	                [encoder dispatchThreads:grid_size threadsPerThreadgroup:group_size];
@@ -1188,6 +1281,10 @@ struct RandomWalkerMetal::Impl {
 		                const float* out = reinterpret_cast<const float*>([out_buffer contents]);
 		                const int* steps = reinterpret_cast<const int*>([steps_buffer contents]);
 		                const float* diagnostics = reinterpret_cast<const float*>([diagnostics_buffer contents]);
+		                const MetalPassRecordHost* pass_records =
+		                    reinterpret_cast<const MetalPassRecordHost*>([pass_records_buffer contents]);
+		                const int* pass_counts = reinterpret_cast<const int*>([pass_counts_buffer contents]);
+		                const int* pass_overflows = reinterpret_cast<const int*>([pass_overflows_buffer contents]);
 		                for (int i = 0; i < M; ++i) {
 		                    for (int n = 0; n < batch_samples; ++n) {
 		                        const int sample_index = sample_offset + n;
@@ -1201,12 +1298,31 @@ struct RandomWalkerMetal::Impl {
 		                        for (int k = 0; k < kDiagnosticStride; ++k) {
 		                            diagnostic_sums[diag_base + k] += static_cast<double>(diagnostics[batch_diag_base + k]);
 		                        }
+		                        if (pass_overflows[batch_index] != 0) {
+		                            pass_overflow_paths += 1;
+		                        }
+		                        int pass_count = std::min(pass_counts[batch_index], kMaxPassesPerPath);
+		                        const size_t pass_base = static_cast<size_t>(batch_index) * kMaxPassesPerPath;
+		                        for (int p = 0; p < pass_count; ++p) {
+		                            const MetalPassRecordHost& record = pass_records[pass_base + p];
+		                            all_pass_samples[i].push_back({
+		                                record.target_index,
+		                                static_cast<double>(record.t_sum),
+		                                static_cast<double>(record.e_hat)
+		                            });
+		                        }
 		                    }
 		                }
 	            }
 	            auto sim_end = std::chrono::high_resolution_clock::now();
 
-	            write_direct_constraints_to_json(M, N, obs_data, constraints_json);
+	            if (pass_overflow_paths > 0) {
+	                throw std::runtime_error("Metal pass-through constraints exceeded max_passes_per_path="
+	                    + std::to_string(kMaxPassesPerPath) + " on "
+	                    + std::to_string(pass_overflow_paths) + " path(s). Increase the fixed pass buffer cap.");
+	            }
+
+	            write_constraints_to_json(all_pass_samples, M, N, obs_data, constraints_json);
 
 	            std::vector<MultiPointStats> stats(M);
 		            for (int i = 0; i < M; ++i) {
