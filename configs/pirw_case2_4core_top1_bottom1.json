@@ -1,6 +1,6 @@
 {
-  "case_name": "case1_power6",
-  "power_map": "power6",
+  "case_name": "case2_4core_top1_bottom1",
+  "power_map": "4-core",
   "geometry": {
     "xy_resolution": 0.0002,
     "z_resolution": 0.00002,
@@ -9,9 +9,9 @@
     "medium_conductivity": 395,
     "x_size": 0.02,
     "y_size": 0.02,
-    "bottom_thickness": 0.0005,
+    "bottom_thickness": 0.001,
     "middle_thickness": 0.0001,
-    "top_thickness": 0.0005
+    "top_thickness": 0.001
   },
   "boundary": {
     "top": {
@@ -34,17 +34,17 @@
     }
   },
   "data": {
-    "power_density_path": "../data/cases/case1_power6/power.bin",
-    "prior_temperature_path": "../data/cases/case1_power6/comsol/comso_12500/temp.bin",
-    "reference_temperature_path": "../data/cases/case1_power6/comsol/comso_full/temp.bin",
+    "power_density_path": "../data/cases/case2_4core_top1_bottom1/power.bin",
+    "prior_temperature_path": "../data/cases/case2_4core_top1_bottom1/comsol/comso_full/temp.bin",
+    "reference_temperature_path": "../data/cases/case2_4core_top1_bottom1/comsol/comso_full/temp.bin",
     "temperature_offset": 0
   },
   "walker": {
     "max_steps": 50000000,
-    "cutoff_weight": 0.03,
+    "cutoff_weight": 0.0001,
     "delta_x": 5e-7,
-    "use_tail_correction": true,
-    "tail_mode": "gt",
+    "use_tail_correction": false,
+    "tail_mode": "none",
     "robin_local_time_mode": "current",
     "diagnostics": {
       "enabled": false
@@ -65,12 +65,12 @@
     ]
   },
   "run": {
-    "num_samples": 400,
+    "num_samples": 1000,
     "num_workers": -1,
     "seed": 42
   },
   "output": {
-    "directory": "../outputs/case1_power6/fastrw",
+    "directory": "../outputs/case2_4core_top1_bottom1/pirw",
     "csv": "direct.csv",
     "constraints": "constraints.json",
     "diagnostics": "diagnostics.json"

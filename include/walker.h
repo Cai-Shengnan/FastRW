@@ -87,7 +87,7 @@ public:
     std::vector<MultiPointStats> simulate_temperature_multi(
         const std::vector<Position>& start_points, int N = 5000,
         int num_workers = -1, int print_interval = 100,
-        const std::string& constraints_json = "outputs/data.json",
+        const std::string& constraints_json = "outputs/constraints.json",
         const std::string& diagnostics_json = "");
     // Run ONE random walk path and record [t_sum, last_heat_local_temp, e_hat]
     // every `record_interval` steps (default 1e5). Save to txt and return Nx3.

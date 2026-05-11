@@ -26,11 +26,18 @@ function readCsv(csvPath) {
 
 function summarize(runDir, csvName) {
   const csvPath = path.join(runDir, csvName);
-  const dataPath = path.join(runDir, "data.json");
+  const dataPath = fs.existsSync(path.join(runDir, "constraints.json"))
+    ? path.join(runDir, "constraints.json")
+    : path.join(runDir, "data.json");
   const rows = readCsv(csvPath);
   const data = fs.existsSync(dataPath) ? JSON.parse(fs.readFileSync(dataPath, "utf8")) : null;
 
   const pointStats = rows.map((row, i) => {
+    const directMean = row.Direct_Mean ?? row.Normal_Mean;
+    const directError = row.Direct_Error ?? row.Error;
+    const fusedMean = row.Fused_Mean;
+    const fusedError = row.Fused_Error;
+    const selectedError = Number.isFinite(fusedError) ? fusedError : directError;
     let sampleSd = null;
     let standardError = null;
     let zScore = null;
@@ -38,14 +45,17 @@ function summarize(runDir, csvName) {
       const samples = data.obs_data.map((sampleRow) => sampleRow[i]);
       sampleSd = std(samples);
       standardError = sampleSd / Math.sqrt(samples.length);
-      zScore = standardError > 0 ? row.Error / standardError : null;
+      zScore = standardError > 0 ? selectedError / standardError : null;
     }
     return {
       point: row.Point,
       gt: row.GT_Temperature,
-      mean: row.Normal_Mean,
-      error: row.Error,
-      abs_error: Math.abs(row.Error),
+      direct_mean: directMean,
+      fused_mean: Number.isFinite(fusedMean) ? fusedMean : null,
+      error: selectedError,
+      direct_error: directError,
+      fused_error: Number.isFinite(fusedError) ? fusedError : null,
+      abs_error: Math.abs(selectedError),
       avg_steps: row.Avg_Steps,
       sample_sd: sampleSd,
       standard_error: standardError,
@@ -85,4 +95,7 @@ if (!runDir) {
   process.exit(2);
 }
 
-console.log(JSON.stringify(summarize(runDir, csvName), null, 2));
+const defaultCsv = fs.existsSync(path.join(runDir, csvName))
+  ? csvName
+  : (fs.existsSync(path.join(runDir, "direct.csv")) ? "direct.csv" : csvName);
+console.log(JSON.stringify(summarize(runDir, defaultCsv), null, 2));

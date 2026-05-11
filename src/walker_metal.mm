@@ -813,7 +813,10 @@ double temperature_index_clamped(const GeometryConfig& geom, int iz, int iy, int
     iz = std::clamp(iz, 0, geom.nz_heat - 1);
     iy = std::clamp(iy, 0, geom.ny - 1);
     ix = std::clamp(ix, 0, geom.nx - 1);
-    return geom.temperature_field[iz][iy][ix];
+    const auto& field = geom.reference_temperature_field.empty()
+        ? geom.temperature_field
+        : geom.reference_temperature_field;
+    return field[iz][iy][ix];
 }
 
 double gt_floor_lookup(const GeometryConfig& geom, const Position& p) {
@@ -855,7 +858,8 @@ void write_constraints_to_json(
     int M,
     int N,
     const std::vector<std::vector<double>>& obs_data,
-    const std::string& filename
+    const std::string& filename,
+    long long pass_overflow_paths = 0
 ) {
     std::vector<int> i_k;
     std::vector<int> j_k;
@@ -870,6 +874,10 @@ void write_constraints_to_json(
             b_k.push_back(ps.t_sum);
         }
     }
+    int self_constraints = 0;
+    for (size_t k = 0; k < i_k.size(); ++k) {
+        if (i_k[k] == j_k[k]) self_constraints++;
+    }
 
     json j;
     j["M"] = M;
@@ -880,6 +888,8 @@ void write_constraints_to_json(
     j["alpha_k"] = alpha_k;
     j["b_k"] = b_k;
     j["obs_data"] = obs_data;
+    j["self_constraints"] = self_constraints;
+    j["pass_overflow_paths"] = pass_overflow_paths;
 
     std::filesystem::path output_path(filename);
     if (output_path.has_parent_path()) {
@@ -1012,7 +1022,7 @@ void write_metal_diagnostics_to_json(
     out << std::setw(2) << j << std::endl;
 }
 
-std::vector<float> flatten_temperature_field(const GeometryConfig& geom) {
+std::vector<float> flatten_prior_temperature_field(const GeometryConfig& geom) {
     std::vector<float> flat(static_cast<size_t>(geom.nz_heat) * geom.ny * geom.nx, 0.0f);
     for (int iz = 0; iz < geom.nz_heat; ++iz) {
         for (int iy = 0; iy < geom.ny; ++iy) {
@@ -1100,7 +1110,7 @@ struct RandomWalkerMetal::Impl {
 
     void upload_geometry_data() {
         std::vector<float> power = flatten_power_density(geom, power_scale);
-        std::vector<float> temp = flatten_temperature_field(geom);
+        std::vector<float> temp = flatten_prior_temperature_field(geom);
 
         power_buffer = [device newBufferWithBytes:power.data()
                                            length:power.size() * sizeof(float)
@@ -1317,12 +1327,12 @@ struct RandomWalkerMetal::Impl {
 	            auto sim_end = std::chrono::high_resolution_clock::now();
 
 	            if (pass_overflow_paths > 0) {
-	                throw std::runtime_error("Metal pass-through constraints exceeded max_passes_per_path="
-	                    + std::to_string(kMaxPassesPerPath) + " on "
-	                    + std::to_string(pass_overflow_paths) + " path(s). Increase the fixed pass buffer cap.");
+	                std::cerr << "Warning: Metal pass-through constraints exceeded max_passes_per_path="
+	                          << kMaxPassesPerPath << " on " << pass_overflow_paths
+	                          << " path(s); extra pass records were dropped." << std::endl;
 	            }
 
-	            write_constraints_to_json(all_pass_samples, M, N, obs_data, constraints_json);
+	            write_constraints_to_json(all_pass_samples, M, N, obs_data, constraints_json, pass_overflow_paths);
 
 	            std::vector<MultiPointStats> stats(M);
 		            for (int i = 0; i < M; ++i) {

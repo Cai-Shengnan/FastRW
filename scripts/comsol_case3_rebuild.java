@@ -29,6 +29,12 @@ public class comsol_case3_rebuild {
   private static final String BUILD_OUTPUT_DIR = "";
   private static final boolean BUILD_SKIP_SOLVE = false;
   private static final boolean BUILD_SMOKE_MODE = false;
+  private static final String BUILD_MESH_LABEL = "full";
+  private static final String BUILD_MESH_HMAX = "dx_cell";
+  private static final String BUILD_MESH_HMIN = "dz_cell";
+  private static final String BUILD_MESH_HGRAD = "1.2";
+  private static final String BUILD_MESH_HNARROW = "0.8";
+  private static final String BUILD_MESH_HCURVE = "0.3";
 
   public static void main(String[] args) {
     run();
@@ -69,7 +75,7 @@ public class comsol_case3_rebuild {
   private static Model buildModel(Map cfg, Path outputDir) throws IOException {
     Model model = ModelUtil.create("Model");
     model.modelPath(outputDir.toString());
-    model.label("case3_16core_rebuild.mph");
+    model.label("fastrw_comsol_rebuild.mph");
 
     model.param().set("Lx", meters(d(cfg, "lx")));
     model.param().set("Ly", meters(d(cfg, "ly")));
@@ -86,7 +92,7 @@ public class comsol_case3_rebuild {
     model.param().set("k_medium", Double.toString(d(cfg, "kMedium")) + "[W/(m*K)]");
     model.param().set("h_top", Double.toString(d(cfg, "hTop")) + "[W/(m^2*K)]");
     model.param().set("h_bottom", Double.toString(d(cfg, "hBottom")) + "[W/(m^2*K)]");
-    model.param().set("T_amb", Double.toString(d(cfg, "ambient")) + "[K]");
+    model.param().set("T_amb", Double.toString(d(cfg, "ambientComsolK")) + "[K]");
 
     createHeatSourceFunction(model, cfg);
 
@@ -242,7 +248,7 @@ public class comsol_case3_rebuild {
         "qsrc(min(max(floor(x/dx_cell),0),99)+100*min(max(floor(y/dy_cell),0),99)+10000*min(max(floor((z-z_heat0)/dz_cell),0),4))");
 
     model.component("comp1").physics("ht").create("hf_top", "HeatFluxBoundary", 2);
-    model.component("comp1").physics("ht").feature("hf_top").label("Top Robin h=4900, Tinf=293.15 K");
+    model.component("comp1").physics("ht").feature("hf_top").label("Top Robin convective boundary");
     model.component("comp1").physics("ht").feature("hf_top").selection().named("sel_top_bnd");
     model.component("comp1").physics("ht").feature("hf_top").set("HeatFluxType", "ConvectiveHeatFlux");
     model.component("comp1").physics("ht").feature("hf_top").set("HeatTransferCoefficientType", "UserDef");
@@ -250,7 +256,7 @@ public class comsol_case3_rebuild {
     model.component("comp1").physics("ht").feature("hf_top").set("Text", "T_amb");
 
     model.component("comp1").physics("ht").create("hf_bottom", "HeatFluxBoundary", 2);
-    model.component("comp1").physics("ht").feature("hf_bottom").label("Bottom Robin h=4900, Tinf=293.15 K");
+    model.component("comp1").physics("ht").feature("hf_bottom").label("Bottom Robin convective boundary");
     model.component("comp1").physics("ht").feature("hf_bottom").selection().named("sel_bottom_bnd");
     model.component("comp1").physics("ht").feature("hf_bottom").set("HeatFluxType", "ConvectiveHeatFlux");
     model.component("comp1").physics("ht").feature("hf_bottom").set("HeatTransferCoefficientType", "UserDef");
@@ -264,30 +270,21 @@ public class comsol_case3_rebuild {
 
   private static void createMesh(Model model) {
     model.component("comp1").mesh().create("mesh1");
-    model.component("comp1").mesh("mesh1").label("case3 reproducible mesh");
+    model.component("comp1").mesh("mesh1").label("FastRW reproducible mesh");
     model.component("comp1").mesh("mesh1").feature("size").set("custom", "on");
-    if (BUILD_SMOKE_MODE) {
-      model.component("comp1").mesh("mesh1").label("case3 smoke-test coarse mesh");
-      model.component("comp1").mesh("mesh1").feature("size").set("hmax", "4[mm]");
-      model.component("comp1").mesh("mesh1").feature("size").set("hmin", "500[um]");
-      model.component("comp1").mesh("mesh1").feature("size").set("hgrad", "2.0");
-      model.component("comp1").mesh("mesh1").feature("size").set("hnarrow", "1");
-      model.component("comp1").mesh("mesh1").feature("size").set("hcurve", "1");
-    } else {
-      model.component("comp1").mesh("mesh1").feature("size").set("hmax", "dx_cell");
-      model.component("comp1").mesh("mesh1").feature("size").set("hmin", "dz_cell");
-      model.component("comp1").mesh("mesh1").feature("size").set("hgrad", "1.2");
-      model.component("comp1").mesh("mesh1").feature("size").set("hnarrow", "0.8");
-      model.component("comp1").mesh("mesh1").feature("size").set("hcurve", "0.3");
-    }
+    model.component("comp1").mesh("mesh1").feature("size").set("hmax", BUILD_MESH_HMAX);
+    model.component("comp1").mesh("mesh1").feature("size").set("hmin", BUILD_MESH_HMIN);
+    model.component("comp1").mesh("mesh1").feature("size").set("hgrad", BUILD_MESH_HGRAD);
+    model.component("comp1").mesh("mesh1").feature("size").set("hnarrow", BUILD_MESH_HNARROW);
+    model.component("comp1").mesh("mesh1").feature("size").set("hcurve", BUILD_MESH_HCURVE);
     model.component("comp1").mesh("mesh1").create("ftet1", "FreeTet");
     model.component("comp1").mesh("mesh1").feature("ftet1").label(
-        BUILD_SMOKE_MODE ? "Free tetrahedral smoke mesh, hmax=4 mm" : "Free tetrahedral mesh, hmax=cell dx");
+        "Free tetrahedral mesh, preset=" + BUILD_MESH_LABEL);
   }
 
   private static void createStudy(Model model) {
     model.study().create("std1");
-    model.study("std1").label("Stationary case3 rebuild");
+    model.study("std1").label("Stationary FastRW COMSOL rebuild");
     model.study("std1").create("stat", "Stationary");
   }
 
@@ -296,10 +293,10 @@ public class comsol_case3_rebuild {
     double[] queryTemps = interpolate(model, queryPoints, outputDir, "query");
     BufferedWriter out = Files.newBufferedWriter(outputDir.resolve("query_temperatures.csv"));
     try {
-      out.write("Point,X,Y,Z,T_K\n");
+      out.write("Point,X,Y,Z,T_C\n");
       for (int i = 0; i < queryPoints.size(); i++) {
         double[] p = queryPoints.get(i);
-        out.write(String.format(Locale.US, "%d,%.17g,%.17g,%.17g,%.17g%n", i, p[0], p[1], p[2], queryTemps[i]));
+        out.write(String.format(Locale.US, "%d,%.17g,%.17g,%.17g,%.17g%n", i, p[0], p[1], p[2], queryTemps[i] - 273.15));
       }
     } finally {
       out.close();
@@ -310,13 +307,13 @@ public class comsol_case3_rebuild {
     BufferedWriter tempOut = Files.newBufferedWriter(outputDir.resolve("heat_layer_cell_center_temperatures.csv"));
     DataOutputStream bin = new DataOutputStream(new FileOutputStream(outputDir.resolve("heat_layer_cell_center_temperatures.bin").toFile()));
     try {
-      tempOut.write("ix,iy,iz,X,Y,Z,T_K\n");
+      tempOut.write("ix,iy,iz,X,Y,Z,T_C\n");
       int row = 0;
       for (int iz = 0; iz < i(cfg, "nzHeat"); iz++) {
         for (int iy = 0; iy < i(cfg, "ny"); iy++) {
           for (int ix = 0; ix < i(cfg, "nx"); ix++) {
             double[] p = cellCenters.get(row);
-            double t = cellTemps[row];
+            double t = cellTemps[row] - 273.15;
             tempOut.write(String.format(Locale.US, "%d,%d,%d,%.17g,%.17g,%.17g,%.17g%n", ix, iy, iz, p[0], p[1], p[2], t));
             writeLittleEndianDouble(bin, t);
             row++;
@@ -513,7 +510,9 @@ public class comsol_case3_rebuild {
     cfg.put("tBottom", Double.valueOf(number(json, "bottom_thickness", 0.001)));
     cfg.put("dx", Double.valueOf(number(json, "xy_resolution", 0.0002)));
     cfg.put("dz", Double.valueOf(number(json, "z_resolution", 0.00002)));
-    cfg.put("ambient", Double.valueOf(number(json, "ambient_temperature", 293.15)));
+    double ambient = number(json, "ambient_temperature", 20.0);
+    cfg.put("ambient", Double.valueOf(ambient));
+    cfg.put("ambientComsolK", Double.valueOf(ambient < 200.0 ? ambient + 273.15 : ambient));
     cfg.put("kSource", Double.valueOf(number(json, "source_conductivity", 125.0)));
     cfg.put("kMedium", Double.valueOf(number(json, "medium_conductivity", 395.0)));
     cfg.put("hTop", Double.valueOf(boundaryParam(json, "top", 4900.0)));
@@ -532,7 +531,7 @@ public class comsol_case3_rebuild {
     cfg.put("ny", Integer.valueOf(checkedRound(d(cfg, "ly") / d(cfg, "dx"), "ny")));
     cfg.put("nzHeat", Integer.valueOf(checkedRound(d(cfg, "tHeat") / d(cfg, "dz"), "nzHeat")));
     if (i(cfg, "nx") != 100 || i(cfg, "ny") != 100 || i(cfg, "nzHeat") != 5) {
-      throw new IllegalArgumentException("Expected 100x100x5 heat cells from case3 config; got "
+      throw new IllegalArgumentException("Expected 100x100x5 heat cells from FastRW case config; got "
           + i(cfg, "nx") + "x" + i(cfg, "ny") + "x" + i(cfg, "nzHeat"));
     }
     return cfg;
@@ -558,10 +557,10 @@ public class comsol_case3_rebuild {
   private static void writeNotes(Map cfg, Path outputDir, String status) throws IOException {
     BufferedWriter out = Files.newBufferedWriter(outputDir.resolve("model_notes.txt"));
     try {
-      out.write("COMSOL case3_16core rebuild\n");
-      out.write("===========================\n\n");
+      out.write("COMSOL FastRW rebuild\n");
+      out.write("=====================\n\n");
       out.write("Status: " + status + "\n");
-      out.write("Mode: " + (BUILD_SMOKE_MODE ? "smoke coarse mesh" : "full reproducible mesh") + "\n");
+      out.write("Mesh label: " + BUILD_MESH_LABEL + "\n");
       out.write("Config: " + path(cfg, "configPath") + "\n");
       out.write("Power input: " + path(cfg, "powerPath") + "\n");
       out.write("Power conversion: Q_W_per_m3 = power_cell_W / (dx * dy * dz)\n");
@@ -575,8 +574,8 @@ public class comsol_case3_rebuild {
       out.write(String.format(Locale.US, "  source k: %.17g W/(m*K), selection sel_heat_dom\n", d(cfg, "kSource")));
       out.write(String.format(Locale.US, "  medium k: %.17g W/(m*K), selection sel_medium_dom\n\n", d(cfg, "kMedium")));
       out.write("Boundary conditions:\n");
-      out.write(String.format(Locale.US, "  top Robin: HeatFlux/ConvectiveHeatFlux, h=%.17g W/(m^2*K), Text=%.17g K, selection sel_top_bnd\n", d(cfg, "hTop"), d(cfg, "ambient")));
-      out.write(String.format(Locale.US, "  bottom Robin: HeatFlux/ConvectiveHeatFlux, h=%.17g W/(m^2*K), Text=%.17g K, selection sel_bottom_bnd\n", d(cfg, "hBottom"), d(cfg, "ambient")));
+      out.write(String.format(Locale.US, "  top Robin: HeatFlux/ConvectiveHeatFlux, h=%.17g W/(m^2*K), Text=%.17g K, selection sel_top_bnd\n", d(cfg, "hTop"), d(cfg, "ambientComsolK")));
+      out.write(String.format(Locale.US, "  bottom Robin: HeatFlux/ConvectiveHeatFlux, h=%.17g W/(m^2*K), Text=%.17g K, selection sel_bottom_bnd\n", d(cfg, "hBottom"), d(cfg, "ambientComsolK")));
       out.write("  lateral Neumann zero flux: ThermalInsulation, selection sel_lateral_bnd\n\n");
       out.write("Selection boxes:\n");
       out.write("  sel_bottom_dom: z in [0, bottom]\n");
@@ -586,15 +585,13 @@ public class comsol_case3_rebuild {
       out.write("  sel_bottom_bnd: z = 0 exterior boundary\n");
       out.write("  sel_lateral_bnd: union of x=0, x=Lx, y=0, y=Ly exterior boundaries\n\n");
       out.write("Mesh:\n");
-      if (BUILD_SMOKE_MODE) {
-        out.write("  smoke coarse mesh: hmax=4 mm, hmin=500 um, hgrad=2.0\n\n");
-      } else {
-        out.write("  full mesh: hmax=dx_cell, hmin=dz_cell, hgrad=1.2\n\n");
-      }
+      out.write("  hmax=" + BUILD_MESH_HMAX + ", hmin=" + BUILD_MESH_HMIN
+          + ", hgrad=" + BUILD_MESH_HGRAD + ", hnarrow=" + BUILD_MESH_HNARROW
+          + ", hcurve=" + BUILD_MESH_HCURVE + "\n\n");
       out.write("Outputs expected after solve:\n");
       out.write("  query_temperatures.csv\n");
       out.write("  heat_layer_cell_center_temperatures.csv\n");
-      out.write("  heat_layer_cell_center_temperatures.bin (float64 little-endian, iz-major then iy then ix)\n");
+      out.write("  heat_layer_cell_center_temperatures.bin (Celsius, float64 little-endian, iz-major then iy then ix)\n");
       out.write("  case3_rebuild.mph\n");
     } finally {
       out.close();

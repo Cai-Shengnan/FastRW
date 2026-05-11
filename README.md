@@ -1,111 +1,97 @@
 # ResRW
 
-Clean C++ layout for the Robin-boundary random-walk solver.
+FastRW random-walk thermal solver and experiment harness.
 
-## Layout
+## Active Experiment Layout
 
-- `src/`, `include/`: active C++ implementation. The default build uses `RandomWalker` from `walker.cpp`.
-- `configs/`: paper-aligned case configs for geometry, boundary conditions, data paths, query grid, and run settings.
-- `data/`: input data sets. Config files point to the power and ground-truth temperature binaries.
-- `outputs/`: generated CSV/JSON results.
-- `stan/`: active Stan post-processing models and cached Stan executables.
-- `legacy/walker2_cuda/`: parked legacy `walker2` CPU implementation.
-- `third_party/`: header-only/vendor dependencies and CmdStan.
+- `src/`, `include/`: CPU and Metal random-walk implementations.
+- `configs/`: current three-case FastRW and PIRW configs.
+- `data/cases/`: canonical paper inputs. Temperature fields in `temp.bin` are stored in Celsius.
+- `outputs/`: generated run outputs; safe to clear and regenerate.
+- `stan/onestage.stan`: retained reference model for the Onestage fusion contract.
+- `scripts/`: build/run, COMSOL generation, Onestage fusion, and summary helpers.
 
-## Build And Run
+The active cases are:
 
-From the repository root:
+- `case1_power6`: `500/100/500 um`, `power6`, `h=8700`.
+- `case2_4core_top1_bottom1`: `1000/100/1000 um`, `4-core`, `h=8700`.
+- `case3_16core`: `500/100/1000 um`, `16-core`, `h=4900`.
 
-```bash
-./scripts/build_and_run.sh
+All current configs use `walker.delta_x = 5e-7`, `boundary.strip_ratio = 1.56`,
+and therefore `boundary.epsilon.neumann = boundary.epsilon.robin = 7.8e-7`.
+The fixed experiment seed is `42`.
+
+## Config Schema
+
+Temperature inputs are split by role:
+
+```json
+"data": {
+  "power_density_path": "../data/cases/<case>/power.bin",
+  "prior_temperature_path": "../data/cases/<case>/comsol/comso_12500/temp.bin",
+  "reference_temperature_path": "../data/cases/<case>/comsol/comso_full/temp.bin",
+  "temperature_offset": 0
+}
 ```
 
-Optional arguments:
+`prior_temperature_path` is used only for FastRW tail correction.
+`reference_temperature_path` is used for `GT_Temperature` and error reporting.
+PIRW disables tail correction, but still points at a reference field for metrics.
+
+## Run
+
+CPU smoke:
 
 ```bash
-./scripts/build_and_run.sh <config_file> <num_samples> <num_workers>
+./scripts/build_and_run.sh configs/case1_power6.json 2 -1
 ```
 
-Example:
+Metal smoke or full runs:
 
 ```bash
-./scripts/build_and_run.sh configs/case3_16core.json 400 -1
+./scripts/build_and_run_metal.sh configs/case1_power6.json 2 -1
+./scripts/build_and_run_metal.sh configs/case1_power6.json 400 -1
 ```
 
-The script configures `build/`, compiles `random_walker`, then runs it. The
-CSV and constraint JSON locations come from the selected config. For example,
-`configs/case3_16core.json` writes:
+Each run writes:
 
-- `outputs/FastRw.csv`
-- `outputs/data.json`
-- `outputs/stan/HBMmodel_chain1.csv`
-- `outputs/stan/HBMmodel_summary.txt`
+- `direct.csv`
+- `FastRw.csv` compatibility alias
+- `constraints.json`
+- `onestage_with_self.csv`
+- `onestage_no_self.csv`
+- `summary.json`
 
-By default, the script runs two random-walk samples so the Stan model can
-estimate per-point variance. Pass `400` or another sample count for a full
-experiment.
+Disable Onestage post-processing with `RUN_ONESTAGE=0`.
 
-Skip Stan post-processing with:
+Run the paper smoke loop over all three cases:
 
 ```bash
-RUN_STAN=0 ./scripts/build_and_run.sh
+./scripts/run_paper_experiments.js smoke
 ```
 
-Run only Stan post-processing, reusing the existing `outputs/data.json`, with:
+For full paper reruns, use:
 
 ```bash
-RUN_RANDOM_WALK=0 ./scripts/build_and_run.sh
+./scripts/run_paper_experiments.js full
 ```
 
-If the random-walk config writes constraints somewhere else, the script passes
-that same `data.json` to Stan automatically. For a Stan-only rerun from a
-specific output directory, set `STAN_DATA`:
+## COMSOL Priors
+
+COMSOL inputs and generated temperature fields live under:
+
+```text
+data/cases/<case>/comsol/comso_<dof>/
+```
+
+The COMSOL helper is case-config driven:
 
 ```bash
-RUN_RANDOM_WALK=0 STAN_DATA=outputs/reproduce/case1_power6_multi/data.json ./scripts/build_and_run.sh
+./scripts/run_comsol_case3_rebuild.sh \
+  --config configs/case2_4core_top1_bottom1.json \
+  --output-dir data/cases/case2_4core_top1_bottom1/comsol/comso_12500 \
+  --mesh-label comso_12500 \
+  --hmax '2[mm]' --hmin '200[um]' --hgrad 1.5
 ```
 
-Adjust the default Stan run with environment variables:
-
-```bash
-STAN_WARMUP=1000 STAN_SAMPLES=1000 STAN_CHAINS=4 ./scripts/build_and_run.sh configs/case3_16core.json 400 -1
-```
-
-By default, the Stan section uses `stan/bin/HBMmodel`, which is the cached
-executable corresponding to `stan/HBMmodel.stan`. Force a rebuild from source
-with `STAN_REBUILD=1`. Rebuilds disable CmdStan precompiled headers by default
-to avoid stale macOS SDK target-version cache issues and use `O=0` so rebuilds
-finish sooner. Re-enable precompiled headers with `STAN_PRECOMPILED_HEADERS=true`,
-or use `STAN_OPT_LEVEL=3` for a more optimized executable.
-
-## Manual Build
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel
-./build/random_walker configs/case3_16core.json 400 -1
-```
-
-## Metal GPU Build On Apple Silicon
-
-This repository also includes a Metal compute backend for Apple Silicon Macs.
-The GPU executable runs direct random-walk estimates and writes the same CSV
-shape as the CPU executable. It also writes CPU-compatible `data.json`
-observations and pass-through constraints for downstream Stan workflows.
-
-Create the Anaconda environment:
-
-```bash
-conda env create -f environment.yml
-conda activate FastRW
-```
-
-Build and run the Metal executable:
-
-```bash
-./scripts/build_and_run_metal.sh configs/case3_16core.json 400 -1
-```
-
-The third argument is the Metal threads-per-threadgroup override. Use `-1` for
-the default. The script builds `build-metal/random_walker_metal` and runs it
-with the same config format as the CPU path.
+The helper exports `temp.bin` and temperature CSV files in Celsius.

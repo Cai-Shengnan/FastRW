@@ -51,10 +51,13 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    if (!fs::exists(config.power_density_path) || !fs::exists(config.ground_truth_path)) {
+    if (!fs::exists(config.power_density_path) ||
+        !fs::exists(config.prior_temperature_path) ||
+        !fs::exists(config.reference_temperature_path)) {
         std::cerr << "Missing input data files.\n"
                   << "  power_density_path: " << config.power_density_path << "\n"
-                  << "  ground_truth_path: " << config.ground_truth_path << "\n";
+                  << "  prior_temperature_path: " << config.prior_temperature_path << "\n"
+                  << "  reference_temperature_path: " << config.reference_temperature_path << "\n";
         return 2;
     }
 
@@ -86,7 +89,8 @@ int main(int argc, char** argv) {
         config.power_density_path.string()
     );
     geom.scale_power_density(config.power_scale);
-    geom.load_temperature_field_from_file(config.ground_truth_path.string(), config.temperature_offset);
+    geom.load_prior_temperature_field_from_file(config.prior_temperature_path.string(), config.temperature_offset);
+    geom.load_reference_temperature_field_from_file(config.reference_temperature_path.string(), config.temperature_offset);
 
     RandomWalkerMetal walker(
         geom,
@@ -105,6 +109,7 @@ int main(int argc, char** argv) {
 
     fs::create_directories(config.output.directory);
     const fs::path csv_path = config.output.directory / config.output.csv;
+    const fs::path compat_csv_path = config.output.directory / "FastRw.csv";
     const fs::path constraints_path = config.output.directory / config.output.constraints;
     const fs::path diagnostics_path = config.output.directory / config.output.diagnostics;
 
@@ -118,12 +123,20 @@ int main(int argc, char** argv) {
     );
 
     std::ofstream csv_file(csv_path);
-    csv_file << "Point,X,Y,Z,Normal_Mean,GT_Temperature,Error,Avg_Steps\n";
+    std::ofstream compat_csv_file;
+    if (csv_path.filename() != compat_csv_path.filename()) {
+        compat_csv_file.open(compat_csv_path);
+    }
+    auto write_header = [](std::ofstream& out) {
+        if (out) out << "Point,X,Y,Z,Direct_Mean,GT_Temperature,Direct_Error,Avg_Steps\n";
+    };
+    write_header(csv_file);
+    write_header(compat_csv_file);
 
     for (size_t i = 0; i < stats.size(); ++i) {
         const auto& s = stats[i];
         const auto& p = points[i];
-        double gt_temp = geom.get_temperature_at(p);
+        double gt_temp = geom.get_reference_temperature_at(p);
         double error = s.normal_mean - gt_temp;
 
         std::cout << "Point " << i
@@ -132,13 +145,22 @@ int main(int argc, char** argv) {
                   << " avg_steps=" << s.avg_steps
                   << std::endl;
 
-        csv_file << i << ","
-                 << p[2] << "," << p[1] << "," << p[0] << ","
-                 << s.normal_mean << "," << gt_temp << "," << error << ","
-                 << s.avg_steps << "\n";
+        auto write_row = [&](std::ofstream& out) {
+            if (out) {
+                out << i << ","
+                    << p[2] << "," << p[1] << "," << p[0] << ","
+                    << s.normal_mean << "," << gt_temp << "," << error << ","
+                    << s.avg_steps << "\n";
+            }
+        };
+        write_row(csv_file);
+        write_row(compat_csv_file);
     }
 
     std::cout << "Results saved to " << csv_path << std::endl;
-    std::cout << "Stan data saved to " << constraints_path << std::endl;
+    if (compat_csv_file) {
+        std::cout << "Compatibility results saved to " << compat_csv_path << std::endl;
+    }
+    std::cout << "Constraints saved to " << constraints_path << std::endl;
     return 0;
 }

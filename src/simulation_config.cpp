@@ -92,6 +92,7 @@ SimulationConfig SimulationConfig::load(const fs::path& config_path) {
         boundary.value("lateral", json::object()),
         GeometryConfig::BoundaryType::Neumann,
         0.0);
+    config.boundary.strip_ratio = get_or<double>(boundary, "strip_ratio", config.boundary.strip_ratio);
     const json epsilon = boundary.value("epsilon", json::object());
     config.boundary.eps_dirichlet = get_or<double>(epsilon, "dirichlet", config.boundary.eps_dirichlet);
     config.boundary.eps_neumann = get_or<double>(epsilon, "neumann", config.boundary.eps_neumann);
@@ -132,13 +133,28 @@ SimulationConfig SimulationConfig::load(const fs::path& config_path) {
     }
 
     const json data = root.value("data", json::object());
-    if (!data.contains("power_density_path") || !data.contains("ground_truth_path")) {
-        throw std::runtime_error("Config must provide data.power_density_path and data.ground_truth_path");
+    if (!data.contains("power_density_path")) {
+        throw std::runtime_error("Config must provide data.power_density_path");
     }
     config.power_density_path = resolve_path(config_dir, data.at("power_density_path").get<std::string>());
-    config.ground_truth_path = resolve_path(config_dir, data.at("ground_truth_path").get<std::string>());
+    if (data.contains("reference_temperature_path")) {
+        config.reference_temperature_path = resolve_path(config_dir, data.at("reference_temperature_path").get<std::string>());
+    } else {
+        throw std::runtime_error("Config must provide data.reference_temperature_path");
+    }
+    if (data.contains("prior_temperature_path") && !data.at("prior_temperature_path").is_null()) {
+        config.prior_temperature_path = resolve_path(config_dir, data.at("prior_temperature_path").get<std::string>());
+    } else {
+        config.prior_temperature_path = config.reference_temperature_path;
+    }
     config.power_scale = get_or<double>(data, "power_scale", config.power_scale);
     config.temperature_offset = get_or<double>(data, "temperature_offset", config.temperature_offset);
+
+    if (config.boundary.strip_ratio > 0.0) {
+        const double ratio_eps = config.boundary.strip_ratio * config.walker.delta_x;
+        config.boundary.eps_neumann = ratio_eps;
+        config.boundary.eps_robin = ratio_eps;
+    }
 
     return config;
 }

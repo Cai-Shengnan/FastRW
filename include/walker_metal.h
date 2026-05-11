@@ -29,7 +29,7 @@ public:
     std::vector<MultiPointStats> simulate_temperature_multi(
         const std::vector<Position>& start_points, int N = 5000,
         int threads_per_threadgroup = -1, int print_interval = 100,
-        const std::string& constraints_json = "outputs/data.json",
+        const std::string& constraints_json = "outputs/constraints.json",
         const std::string& diagnostics_json = "");
 
 private:

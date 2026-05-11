@@ -25,7 +25,7 @@ static thread_local std::mt19937 rng((std::random_device())());
 void write_constraints_to_json(
     const std::vector<std::vector<PassSample>>& all_pass_samples,
     int M, int N, const std::vector<std::vector<double>>& obs_data,
-    const std::string& filename = "outputs/data.json"
+    const std::string& filename = "outputs/constraints.json"
 ) {
     std::vector<int> i_k;
     std::vector<int> j_k;
@@ -40,6 +40,10 @@ void write_constraints_to_json(
             b_k.push_back(ps.t_sum);
         }
     }
+    int self_constraints = 0;
+    for (size_t k = 0; k < i_k.size(); ++k) {
+        if (i_k[k] == j_k[k]) self_constraints++;
+    }
 
     json j;
     j["M"] = M;
@@ -50,6 +54,8 @@ void write_constraints_to_json(
     j["j_k"] = j_k;
     j["alpha_k"] = alpha_k;
     j["b_k"] = b_k;
+    j["self_constraints"] = self_constraints;
+    j["pass_overflow_paths"] = 0;
 
     // 将 obs_data 转换为二维数组
     j["obs_data"] = obs_data;
@@ -411,7 +417,7 @@ std::tuple<double, std::string, int> RandomWalker::simulate_single_path(const Po
                 T_i[0] += e_hat * reward;
                 if(e_hat < eps && region == "heat_source" ){
                     if(use_tail_correction && tail_mode == TailMode::Gt) {
-                        T_i[1] += e_hat * geom.get_temperature_at(pos);
+                        T_i[1] += e_hat * geom.get_prior_temperature_at(pos);
                     }
                     break;
                 }
@@ -602,7 +608,7 @@ RandomWalker::simulate_single_path_record(
                 // FastRW Zixiao
                 if(e_hat < eps && region == "heat_source" ){
                     if(use_tail_correction && tail_mode == TailMode::Gt) {
-                        T_i[1] += e_hat * geom.get_temperature_at(pos);
+                        T_i[1] += e_hat * geom.get_prior_temperature_at(pos);
                     }
                     break;
                 }
@@ -932,7 +938,7 @@ std::vector<std::array<double, 3>> RandomWalker::simulate_temperature_trace(
                 // 原逻辑：在 heat_source 且 e_hat 很小 -> 用 local 温度收尾
                 if (e_hat < eps && region == "heat_source") {
                     if(use_tail_correction && tail_mode == TailMode::Gt) {
-                        T_i[1] += e_hat * geom.get_temperature_at(pos);
+                        T_i[1] += e_hat * geom.get_prior_temperature_at(pos);
                     }
                     // break 前不强行补记录（严格“每隔固定间隙”才记）
                     break;
@@ -1100,7 +1106,7 @@ RandomWalker::simulate_single_path_random_cutoff(
                     // 仍保留你原先的“很小 e_hat 快速收尾”逻辑（可选）
                     if (e_hat < eps) {
                         if(use_tail_correction && tail_mode == TailMode::Gt) {
-                            T_i[1] += e_hat * geom.get_temperature_at(pos);
+                            T_i[1] += e_hat * geom.get_prior_temperature_at(pos);
                         }
                         break;
                     }

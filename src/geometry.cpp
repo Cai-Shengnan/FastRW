@@ -1,5 +1,6 @@
 #include "geometry.h"
 #include <fstream>
+#include <stdexcept>
 
 
 using std::vector;
@@ -99,7 +100,7 @@ GeometryConfig::GeometryConfig(double x_size_, double y_size_,
               << ", Neumann: " << boundary_epsilon[1] << ", Robin: " << boundary_epsilon[2] << " }\n";
     std::cout << "  Thermal conductivities: { source: " << k_source
               << ", medium: " << k_medium << " } W/(K*m)\n";
-    std::cout << "  Ambient temperature: " << T_am << " K\n";
+    std::cout << "  Ambient temperature: " << T_am << "\n";
     std::cout << "  Power density shape: (" << nz_heat << ", " << (ny+1) << ", " << (nx+1) << ")\n\n";
 }
 
@@ -369,18 +370,23 @@ void GeometryConfig::scale_power_density(double factor) {
 }
 
 
-void GeometryConfig::load_temperature_field_from_file(const std::string& filename, double temperature_offset) {
-    temperature_field.resize(nz_heat);
+namespace {
+void load_temperature_field_impl(std::vector<std::vector<std::vector<double>>>& field,
+                                 int nz_heat, int ny, int nx,
+                                 const std::string& filename,
+                                 double temperature_offset,
+                                 const std::string& label) {
+    field.resize(nz_heat);
     for (int iz = 0; iz < nz_heat; ++iz) {
-        temperature_field[iz].resize(ny);
+        field[iz].resize(ny);
         for (int iy = 0; iy < ny; ++iy) {
-            temperature_field[iz][iy].resize(nx, 0.0);
+            field[iz][iy].resize(nx, 0.0);
         }
     }
 
     std::ifstream fin(filename, std::ios::binary);
     if (!fin) {
-        throw std::runtime_error("Failed to open temperature field file: " + filename);
+        throw std::runtime_error("Failed to open " + label + " temperature field file: " + filename);
     }
 
     for (int iz = 0; iz < nz_heat; ++iz) {
@@ -389,30 +395,64 @@ void GeometryConfig::load_temperature_field_from_file(const std::string& filenam
                 double val;
                 fin.read(reinterpret_cast<char*>(&val), sizeof(double));
                 if (!fin) {
-                    throw std::runtime_error("Unexpected EOF or read error in temperature field.");
+                    throw std::runtime_error("Unexpected EOF or read error in " + label + " temperature field.");
                 }
-                temperature_field[iz][iy][ix] = val + temperature_offset;
+                field[iz][iy][ix] = val + temperature_offset;
             }
         }
     }
     fin.close();
-    std::cout << "[GeometryConfig] Loaded temperature field from: " << filename
+    std::cout << "[GeometryConfig] Loaded " << label << " temperature field from: " << filename
               << " (offset " << temperature_offset << ")\n";
 }
 
-
-double GeometryConfig::get_temperature_at(const std::array<double, 3>& pos) const {
-    // 坐标转 index，和 get_conductance 一样
+double temperature_at_impl(const std::vector<std::vector<std::vector<double>>>& field,
+                           int nz_heat, int ny, int nx,
+                           double z_resolution, double xy_resolution,
+                           const std::pair<int,int>& z_heat,
+                           const std::array<double, 3>& pos,
+                           const std::string& label) {
     double z = pos[0], y = pos[1], x = pos[2];
     int iz = static_cast<int>(std::floor(z / z_resolution)) - z_heat.first;
     int iy = static_cast<int>(std::floor(y / xy_resolution));
     int ix = static_cast<int>(std::floor(x / xy_resolution));
 
-    // 检查 index 合法性（仅在 heat_source 区域索引）
+    if (field.empty()) {
+        throw std::runtime_error(label + " temperature field is not loaded");
+    }
     if (iz < 0 || iz >= nz_heat || iy < 0 || iy >= ny || ix < 0 || ix >= nx) {
         std::cout << z << " " << y << " " << x << std::endl;
         std::cout << iz << " " << iy << " " << ix << std::endl;
-        throw std::out_of_range("Physical position out of temperature_field range");
+        throw std::out_of_range("Physical position out of " + label + " temperature_field range");
     }
-    return temperature_field[iz][iy][ix];
+    return field[iz][iy][ix];
+}
+}
+
+void GeometryConfig::load_prior_temperature_field_from_file(const std::string& filename, double temperature_offset) {
+    load_temperature_field_impl(temperature_field, nz_heat, ny, nx, filename, temperature_offset, "prior");
+}
+
+void GeometryConfig::load_reference_temperature_field_from_file(const std::string& filename, double temperature_offset) {
+    load_temperature_field_impl(reference_temperature_field, nz_heat, ny, nx, filename, temperature_offset, "reference");
+}
+
+void GeometryConfig::load_temperature_field_from_file(const std::string& filename, double temperature_offset) {
+    load_prior_temperature_field_from_file(filename, temperature_offset);
+    load_reference_temperature_field_from_file(filename, temperature_offset);
+}
+
+double GeometryConfig::get_prior_temperature_at(const std::array<double, 3>& pos) const {
+    return temperature_at_impl(temperature_field, nz_heat, ny, nx, z_resolution, xy_resolution, z_heat, pos, "prior");
+}
+
+double GeometryConfig::get_reference_temperature_at(const std::array<double, 3>& pos) const {
+    if (!reference_temperature_field.empty()) {
+        return temperature_at_impl(reference_temperature_field, nz_heat, ny, nx, z_resolution, xy_resolution, z_heat, pos, "reference");
+    }
+    return get_prior_temperature_at(pos);
+}
+
+double GeometryConfig::get_temperature_at(const std::array<double, 3>& pos) const {
+    return get_reference_temperature_at(pos);
 }

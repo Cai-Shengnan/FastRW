@@ -13,6 +13,12 @@ PREPARE_ONLY=0
 SMOKE_MODE=0
 OUT_DIR_SET=0
 CONFIG_REL="configs/case3_16core.json"
+MESH_LABEL="full"
+MESH_HMAX="dx_cell"
+MESH_HMIN="dz_cell"
+MESH_HGRAD="1.2"
+MESH_HNARROW="0.8"
+MESH_HCURVE="0.3"
 
 usage() {
   cat <<'USAGE'
@@ -23,6 +29,12 @@ Options:
   --compile-only       Only run `comsol compile`; do not execute batch.
   --prepare-only       Run Java class with COMSOL_CASE3_SKIP_SOLVE=1.
   --smoke              Use a coarse mesh and default to outputs/comsol_case3_rebuild_smoke.
+  --mesh-label NAME    Label recorded in metadata. Default: full.
+  --hmax VALUE         COMSOL mesh hmax expression. Default: dx_cell.
+  --hmin VALUE         COMSOL mesh hmin expression. Default: dz_cell.
+  --hgrad VALUE        COMSOL mesh hgrad value. Default: 1.2.
+  --hnarrow VALUE      COMSOL mesh hnarrow value. Default: 0.8.
+  --hcurve VALUE       COMSOL mesh hcurve value. Default: 0.3.
   --output-dir DIR     Output directory. Default: outputs/comsol_case3_rebuild.
   --prefs-dir DIR      Isolated COMSOL prefs directory. Default: <output-dir>/comsol_prefs.
   --np N               COMSOL -np value. Default: auto or COMSOL_NP.
@@ -52,7 +64,37 @@ while [[ $# -gt 0 ]]; do
       ;;
     --smoke)
       SMOKE_MODE=1
+      MESH_LABEL="smoke"
+      MESH_HMAX="4[mm]"
+      MESH_HMIN="500[um]"
+      MESH_HGRAD="2.0"
+      MESH_HNARROW="1"
+      MESH_HCURVE="1"
       shift
+      ;;
+    --mesh-label)
+      MESH_LABEL="$2"
+      shift 2
+      ;;
+    --hmax)
+      MESH_HMAX="$2"
+      shift 2
+      ;;
+    --hmin)
+      MESH_HMIN="$2"
+      shift 2
+      ;;
+    --hgrad)
+      MESH_HGRAD="$2"
+      shift 2
+      ;;
+    --hnarrow)
+      MESH_HNARROW="$2"
+      shift 2
+      ;;
+    --hcurve)
+      MESH_HCURVE="$2"
+      shift 2
       ;;
     --output-dir)
       OUT_DIR="$2"
@@ -173,11 +215,23 @@ SMOKE_JAVA="false"
 if [[ "${SMOKE_MODE}" == "1" ]]; then
   SMOKE_JAVA="true"
 fi
+MESH_LABEL_JAVA="$(java_literal "${MESH_LABEL}")"
+MESH_HMAX_JAVA="$(java_literal "${MESH_HMAX}")"
+MESH_HMIN_JAVA="$(java_literal "${MESH_HMIN}")"
+MESH_HGRAD_JAVA="$(java_literal "${MESH_HGRAD}")"
+MESH_HNARROW_JAVA="$(java_literal "${MESH_HNARROW}")"
+MESH_HCURVE_JAVA="$(java_literal "${MESH_HCURVE}")"
 perl -0pi -e "s#private static final String DEFAULT_REPO_ROOT = \".*?\";#private static final String DEFAULT_REPO_ROOT = \"${ROOT_JAVA}\";#s" "${BUILD_SRC}"
 perl -0pi -e "s#private static final String CONFIG_REL = \".*?\";#private static final String CONFIG_REL = \"${CONFIG_JAVA}\";#s" "${BUILD_SRC}"
 perl -0pi -e "s#private static final String BUILD_OUTPUT_DIR = \".*?\";#private static final String BUILD_OUTPUT_DIR = \"${OUT_JAVA}\";#s" "${BUILD_SRC}"
 perl -0pi -e "s#private static final boolean BUILD_SKIP_SOLVE = (true|false);#private static final boolean BUILD_SKIP_SOLVE = ${SKIP_JAVA};#s" "${BUILD_SRC}"
 perl -0pi -e "s#private static final boolean BUILD_SMOKE_MODE = (true|false);#private static final boolean BUILD_SMOKE_MODE = ${SMOKE_JAVA};#s" "${BUILD_SRC}"
+perl -0pi -e "s#private static final String BUILD_MESH_LABEL = \".*?\";#private static final String BUILD_MESH_LABEL = \"${MESH_LABEL_JAVA}\";#s" "${BUILD_SRC}"
+perl -0pi -e "s#private static final String BUILD_MESH_HMAX = \".*?\";#private static final String BUILD_MESH_HMAX = \"${MESH_HMAX_JAVA}\";#s" "${BUILD_SRC}"
+perl -0pi -e "s#private static final String BUILD_MESH_HMIN = \".*?\";#private static final String BUILD_MESH_HMIN = \"${MESH_HMIN_JAVA}\";#s" "${BUILD_SRC}"
+perl -0pi -e "s#private static final String BUILD_MESH_HGRAD = \".*?\";#private static final String BUILD_MESH_HGRAD = \"${MESH_HGRAD_JAVA}\";#s" "${BUILD_SRC}"
+perl -0pi -e "s#private static final String BUILD_MESH_HNARROW = \".*?\";#private static final String BUILD_MESH_HNARROW = \"${MESH_HNARROW_JAVA}\";#s" "${BUILD_SRC}"
+perl -0pi -e "s#private static final String BUILD_MESH_HCURVE = \".*?\";#private static final String BUILD_MESH_HCURVE = \"${MESH_HCURVE_JAVA}\";#s" "${BUILD_SRC}"
 
 echo "COMSOL: ${COMSOL_BIN}"
 "${COMSOL_BIN}" -version | tee "${OUT_DIR}/comsol_version.txt"

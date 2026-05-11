@@ -1,0 +1,13 @@
+{
+  "note": "Generate concrete configs by copying one FastRW case config and changing data.prior_temperature_path to data/cases/<case>/comsol/comso_<dof>/temp.bin plus output.directory.",
+  "strip_ratio": 1.56,
+  "delta_x": 5e-7,
+  "seed": 42,
+  "prior_levels": [
+    "comso_1875",
+    "comso_4800",
+    "comso_12500",
+    "comso_32000",
+    "comso_86247"
+  ]
+}

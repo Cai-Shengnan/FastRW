@@ -23,7 +23,7 @@ struct SimulationConfig {
         double bottom_thickness = 1e-3;
         double xy_resolution = 2e-4;
         double z_resolution = 2e-5;
-        double ambient_temperature = 293.15;
+        double ambient_temperature = 20.0;
         double source_conductivity = 125.0;
         double medium_conductivity = 395.0;
     };
@@ -32,9 +32,10 @@ struct SimulationConfig {
         BoundaryConfig top;
         BoundaryConfig bottom;
         BoundaryConfig lateral;
+        double strip_ratio = 1.56;
         double eps_dirichlet = 1e-8;
-        double eps_neumann = 1.5 * 5e-7;
-        double eps_robin = 1.5 * 5e-7;
+        double eps_neumann = 1.56 * 5e-7;
+        double eps_robin = 1.56 * 5e-7;
     };
 
     struct Walker {
@@ -61,8 +62,8 @@ struct SimulationConfig {
 
     struct Output {
         std::filesystem::path directory;
-        std::string csv = "FastRw.csv";
-        std::string constraints = "data.json";
+        std::string csv = "direct.csv";
+        std::string constraints = "constraints.json";
         std::string diagnostics = "diagnostics.json";
     };
 
@@ -81,9 +82,10 @@ struct SimulationConfig {
     Output output;
     Run run;
     std::filesystem::path power_density_path;
-    std::filesystem::path ground_truth_path;
+    std::filesystem::path prior_temperature_path;
+    std::filesystem::path reference_temperature_path;
     double power_scale = 1.0;
-    double temperature_offset = 273.15;
+    double temperature_offset = 0.0;
 
     static SimulationConfig load(const std::filesystem::path& config_path);
     std::vector<std::array<double, 3>> make_query_points() const;

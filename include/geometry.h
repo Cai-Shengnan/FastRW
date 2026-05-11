@@ -29,7 +29,7 @@ public:
                    double eps_dirichlet = 1e-8,
                    double eps_neumann = 1.5 * 5e-7,
                    double eps_robin = 1.5 * 5e-7,
-                   double ambient_temperature = 293.15,
+                   double ambient_temperature = 20.0,
                    double source_conductivity = 125.0,
                    double medium_conductivity = 395.0,
                    const std::string& power_density_path = "");
@@ -55,10 +55,15 @@ public:
     void load_power_density_from_file(const std::string& filename, bool padding);
     void scale_power_density(double factor);
 
-    // Load temperature field from binary file, same dimensions as power_density (no padding)
-    void load_temperature_field_from_file(const std::string& filename, double temperature_offset = 273.15);
+    // Load temperature fields from binary files, same dimensions as power_density (no padding).
+    // The prior field is used for FastRW tail correction; the reference field is used for error reporting.
+    void load_prior_temperature_field_from_file(const std::string& filename, double temperature_offset = 0.0);
+    void load_reference_temperature_field_from_file(const std::string& filename, double temperature_offset = 0.0);
+    void load_temperature_field_from_file(const std::string& filename, double temperature_offset = 0.0);
 
-    // Get temperature at a given physical position (z, y, x in meters)
+    // Get temperatures at a given physical position (z, y, x in meters).
+    double get_prior_temperature_at(const std::array<double, 3>& pos) const;
+    double get_reference_temperature_at(const std::array<double, 3>& pos) const;
     double get_temperature_at(const std::array<double, 3>& pos) const;
 
 
@@ -88,8 +93,10 @@ public:
     // 3D array of volumetric heat power density (W/m^3) for the heat source region.
     // Dimensions: [nz_heat][ny+1][nx+1] (padded in y and x directions).
     std::vector<std::vector<std::vector<double>>> power_density;
-    // 3D array of temperature field (same logic as power_density, no padding)
+    // 3D array of prior temperature field (same logic as power_density, no padding)
     std::vector<std::vector<std::vector<double>>> temperature_field;
+    // 3D array of reference temperature field (same logic as power_density, no padding)
+    std::vector<std::vector<std::vector<double>>> reference_temperature_field;
 
 private:
     // Compute conductance at a specific grid index (iz, iy, ix)
