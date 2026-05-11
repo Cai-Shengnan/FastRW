@@ -158,6 +158,75 @@ Immediate observations:
 - Direct errors are sub-kelvin for all rows.
 - Current Onestage post-processing worsens the average absolute error for every row. Do not use fused values in paper tables until this is diagnosed.
 
+## Direct FastRW vs PIRW Error Check
+
+Question: why is direct FastRW slightly worse than PIRW in the first full main-table run?
+
+Evidence from `constraints.json` sample data:
+
+| Case | Method | N | Avg sample std | Avg standard error | Predicted avg abs error if unbiased | Observed avg abs error | RMS z-score | Points with \|z\| > 2 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Case 1 | PIRW | 1000 | 14.671 | 0.464 | 0.370 | 0.424 | 1.089 | 1 |
+| Case 1 | FastRW | 400 | 14.796 | 0.740 | 0.590 | 0.650 | 1.022 | 1 |
+| Case 2 | PIRW | 1000 | 16.946 | 0.536 | 0.428 | 0.605 | 1.391 | 2 |
+| Case 2 | FastRW | 400 | 16.729 | 0.836 | 0.667 | 0.621 | 0.999 | 1 |
+| Case 3 | PIRW | 1000 | 15.332 | 0.485 | 0.387 | 0.364 | 0.993 | 1 |
+| Case 3 | FastRW | 400 | 15.224 | 0.761 | 0.607 | 0.571 | 0.929 | 0 |
+
+Interpretation:
+
+- FastRW and PIRW have almost the same per-path sample standard deviation in all three cases.
+- FastRW uses `400` paths and PIRW uses `1000`, so FastRW standard error should be about `sqrt(1000/400)=1.58x` larger. The measured standard-error ratios are `1.59`, `1.56`, and `1.57`.
+- Observed direct errors are close to the predicted Monte Carlo error scale. RMS z-scores are near `1`, so the direct FastRW error does not look like a solver bug.
+
+Prior-vs-reference check for the default `comso_12500` prior:
+
+| Case | Prior avg abs error | Prior max abs error | `0.03 * max_abs` tail-bias bound |
+|---|---:|---:|---:|
+| Case 1 | 0.0202 | 0.0886 | 0.0027 |
+| Case 2 | 0.1327 | 0.3779 | 0.0113 |
+| Case 3 | 0.1441 | 0.4387 | 0.0132 |
+
+The prior-induced threshold bias bound is much smaller than the current Monte Carlo standard errors (`0.74`, `0.84`, `0.76` for FastRW), so the direct FastRW deficit is dominated by path count, not by prior error.
+
+Rough path counts needed for FastRW direct to match the observed PIRW average absolute error, using current sample standard deviations:
+
+| Case | FastRW paths needed | Estimated FastRW runtime | Speedup vs PIRW |
+|---|---:|---:|---:|
+| Case 1 | 774 | 58.6 s | 3.31x |
+| Case 2 | 487 | 37.0 s | 5.36x |
+| Case 3 | 1115 | 148.1 s | 2.37x |
+
+Conclusion: direct FastRW is currently less accurate mainly because it uses fewer paths. The direct solver looks statistically consistent. The separate problem is Onestage fusion, which should have compensated for the smaller path count but currently worsens the estimate.
+
+## Coarse Prior Runtime And Error
+
+Errors are computed against each case's `comso_full/temp.bin`. Temperature fields are stored in Celsius, so temperature-difference magnitudes are numerically the same in K.
+
+Runtime source:
+
+- Case 1: archived `power_6_meshes/mesh_information.txt`.
+- Case 2: generated COMSOL `comsol_batch.log` class runtime.
+- Case 3: archived runtime for the reused approximate 16-core priors.
+
+| Case | Prior | Runtime (s) | Max abs error | Avg abs error | RMSE |
+|---|---|---:|---:|---:|---:|
+| Case 1 | `comso_1875` | 2 | 1.9319 | 0.5749 | 0.6223 |
+| Case 1 | `comso_4800` | 2 | 0.8850 | 0.2261 | 0.2646 |
+| Case 1 | `comso_12500` | 4 | 0.0886 | 0.0202 | 0.0245 |
+| Case 1 | `comso_32000` | 9 | 0.2268 | 0.0413 | 0.0529 |
+| Case 1 | `comso_86247` | 17 | 0.3566 | 0.1101 | 0.1338 |
+| Case 2 | `comso_1875` | 16 | 1.7292 | 0.8943 | 0.9112 |
+| Case 2 | `comso_4800` | 17 | 0.5760 | 0.2556 | 0.2642 |
+| Case 2 | `comso_12500` | 24 | 0.3779 | 0.1327 | 0.1470 |
+| Case 2 | `comso_32000` | 54 | 0.1386 | 0.0342 | 0.0405 |
+| Case 2 | `comso_86247` | 70 | 0.0812 | 0.0260 | 0.0283 |
+| Case 3 | `comso_1875` | 1 | 0.3741 | 0.0948 | 0.1125 |
+| Case 3 | `comso_4800` | 2 | 0.0714 | 0.0109 | 0.0141 |
+| Case 3 | `comso_12500` | 3 | 0.4387 | 0.1441 | 0.1780 |
+
+Case 3 currently only has three reused approximate priors. Case 1 and Case 3 errors are not perfectly monotone in the directory labels because several fields are reused or mapped from approximate existing meshes rather than generated from a single monotone COMSOL sweep.
+
 ## Fusion Diagnostics 1
 
 Command:
@@ -309,3 +378,120 @@ For the three FastRW schema-2 diagnostic runs, the conservative default gives:
 | Case 3 | 0.5713 | 0.5699 | 1033 |
 
 This is intentionally conservative. The reference-selected Case 1 result can be much better, but that should not become the paper/default rule until we have a reference-free parameter choice.
+
+## Case 1 Spacing Sweep
+
+Command:
+
+```bash
+node scripts/run_case1_spacing_sweep.js
+```
+
+Fixed prior path plug-in parameters:
+
+```text
+source = prior
+aggregator = max_alpha
+include_self = false
+alpha_min = 0.3
+lambda = 1.0
+```
+
+Output:
+
+- `outputs/fusion_diagnostics/case1_spacing_sweep/summary.csv`
+
+Summary:
+
+| Spacing | Query indices | Method | K | MAE | Avg variance | Avg SE |
+|---:|---|---|---:|---:|---:|---:|
+| 10 | `10 20 30 40` | PIRW direct | 64698 | 0.4242 | 0.217535 | 0.4639 |
+| 10 | `10 20 30 40` | FastRW direct | 13097 | 0.6503 | 0.554657 | 0.7398 |
+| 10 | `10 20 30 40` | FastRW prior path plug-in | 13097 | 0.5805 | 0.439001 | 0.6550 |
+| 4 | `19 23 27 31` | PIRW direct | 65965 | 0.3949 | 0.237476 | 0.4867 |
+| 4 | `19 23 27 31` | FastRW direct | 14356 | 0.5835 | 0.604117 | 0.7758 |
+| 4 | `19 23 27 31` | FastRW prior path plug-in | 14356 | 0.5615 | 0.462253 | 0.6771 |
+| 2 | `22 24 26 28` | PIRW direct | 56865 | 0.4059 | 0.241251 | 0.4910 |
+| 2 | `22 24 26 28` | FastRW direct | 12895 | 0.5792 | 0.613404 | 0.7827 |
+| 2 | `22 24 26 28` | FastRW prior path plug-in | 12895 | 0.5929 | 0.484376 | 0.6950 |
+| 1 | `24 25 26 27` | PIRW direct | 40677 | 0.4003 | 0.245239 | 0.4951 |
+| 1 | `24 25 26 27` | FastRW direct | 9060 | 0.5512 | 0.622352 | 0.7886 |
+| 1 | `24 25 26 27` | FastRW prior path plug-in | 9060 | 0.5698 | 0.523548 | 0.7231 |
+
+Interpretation:
+
+- Prior path plug-in consistently reduces FastRW variance and Avg SE.
+- Smaller spacing did not increase the benefit. The adjacent 4x4 grid had fewer pass-through constraints and weaker fusion gains.
+- The current pass-through rule alone is not enough to close the variance gap to PIRW direct.
+
+## Prior Residual Smoothing Diagnostic
+
+Method:
+
+```text
+T_hat(x) = T_prior(x) + smooth(T_direct(x) - T_prior(x))
+```
+
+The smoother is an RBF kernel ridge / GP-style residual smoother over query point locations. This diagnostic reports both reference-selected best MAE and a leave-one-out selected row where applicable. It also reports `prior only` separately because the default `comso_12500` prior is already very accurate at the query points.
+
+Commands:
+
+```bash
+node scripts/diagnose_prior_residual_smoothing.js
+node scripts/diagnose_prior_residual_smoothing.js \
+  s10=outputs/fusion_diagnostics/case1_spacing_sweep/s10_current/fastrw_direct=outputs/fusion_diagnostics/case1_spacing_sweep/configs/s10_current_fastrw_direct.json \
+  s4=outputs/fusion_diagnostics/case1_spacing_sweep/s4_medium/fastrw_direct=outputs/fusion_diagnostics/case1_spacing_sweep/configs/s4_medium_fastrw_direct.json \
+  s2=outputs/fusion_diagnostics/case1_spacing_sweep/s2_dense/fastrw_direct=outputs/fusion_diagnostics/case1_spacing_sweep/configs/s2_dense_fastrw_direct.json \
+  s1=outputs/fusion_diagnostics/case1_spacing_sweep/s1_adjacent/fastrw_direct=outputs/fusion_diagnostics/case1_spacing_sweep/configs/s1_adjacent_fastrw_direct.json
+```
+
+Outputs:
+
+- `outputs/fusion_diagnostics/prior_residual_smoothing_main_summary.csv`
+- `outputs/fusion_diagnostics/prior_residual_smoothing_main_sweep.csv`
+- `outputs/fusion_diagnostics/prior_residual_smoothing_summary.csv`
+- `outputs/fusion_diagnostics/prior_residual_smoothing_sweep.csv`
+
+Main three-case FastRW summary:
+
+| Case | Method | MAE | Avg variance | Avg SE | Bootstrap Avg variance | Bootstrap Avg SE |
+|---|---|---:|---:|---:|---:|---:|
+| Case 1 | FastRW direct baseline | 0.6503 | 0.554657 | 0.7398 | 0.554657 | 0.7398 |
+| Case 1 | prior only | 0.0207 | 0.000000 | 0.0000 | 0.000000 | 0.0000 |
+| Case 1 | best MAE residual smoothing | 0.0174 | 0.000365 | 0.0190 | 0.001546 | 0.0391 |
+| Case 1 | LOO residual smoothing | 0.1739 | 0.036136 | 0.1900 | 0.093513 | 0.3053 |
+| Case 2 | FastRW direct baseline | 0.6209 | 0.700810 | 0.8364 | 0.700810 | 0.8364 |
+| Case 2 | prior only | 0.1890 | 0.000000 | 0.0000 | 0.000000 | 0.0000 |
+| Case 2 | best MAE residual smoothing | 0.0662 | 0.015744 | 0.1254 | 0.023686 | 0.1539 |
+| Case 3 | FastRW direct baseline | 0.5713 | 0.582570 | 0.7612 | 0.582570 | 0.7612 |
+| Case 3 | prior only | 0.0340 | 0.000000 | 0.0000 | 0.000000 | 0.0000 |
+| Case 3 | best MAE residual smoothing | 0.0343 | 0.000000 | 0.0004 | 0.000002 | 0.0014 |
+| Case 3 | LOO residual smoothing | 0.4230 | 0.094634 | 0.3060 | 0.141688 | 0.3731 |
+
+Case 1 spacing summary:
+
+| Spacing | Method | MAE | Avg variance | Avg SE | Bootstrap Avg variance | Bootstrap Avg SE |
+|---:|---|---:|---:|---:|---:|---:|
+| 10 | FastRW direct baseline | 0.6503 | 0.554657 | 0.7398 | 0.554657 | 0.7398 |
+| 10 | prior only | 0.0207 | 0.000000 | 0.0000 | 0.000000 | 0.0000 |
+| 10 | best MAE residual smoothing | 0.0174 | 0.000365 | 0.0190 | 0.001546 | 0.0391 |
+| 10 | LOO residual smoothing | 0.1739 | 0.036136 | 0.1900 | 0.093513 | 0.3053 |
+| 4 | FastRW direct baseline | 0.5835 | 0.604117 | 0.7758 | 0.604117 | 0.7758 |
+| 4 | prior only | 0.0216 | 0.000000 | 0.0000 | 0.000000 | 0.0000 |
+| 4 | best MAE residual smoothing | 0.0158 | 0.001262 | 0.0354 | 0.006019 | 0.0774 |
+| 4 | LOO residual smoothing | 0.0215 | 0.000000 | 0.0005 | 0.000003 | 0.0017 |
+| 2 | FastRW direct baseline | 0.5792 | 0.613404 | 0.7827 | 0.613404 | 0.7827 |
+| 2 | prior only | 0.0142 | 0.000000 | 0.0000 | 0.000000 | 0.0000 |
+| 2 | best MAE residual smoothing | 0.0042 | 0.001378 | 0.0370 | 0.006154 | 0.0783 |
+| 2 | LOO residual smoothing | 0.5050 | 0.467798 | 0.6837 | 0.557925 | 0.7461 |
+| 1 | FastRW direct baseline | 0.5512 | 0.622352 | 0.7886 | 0.622352 | 0.7886 |
+| 1 | prior only | 0.0115 | 0.000000 | 0.0000 | 0.000000 | 0.0000 |
+| 1 | best MAE residual smoothing | 0.0050 | 0.000374 | 0.0193 | 0.001926 | 0.0439 |
+| 1 | LOO residual smoothing | 0.0112 | 0.000001 | 0.0008 | 0.000006 | 0.0025 |
+
+Interpretation:
+
+- With the default `comso_12500` prior, prior residual smoothing is dominated by prior quality. The prior alone is already far more accurate than the RW estimates at these query points.
+- Reference-selected residual smoothing can improve slightly over prior only, but that is not a production rule.
+- Leave-one-out selection is unstable on small 4x4 grids; it works for some spacing groups and fails for spacing 2.
+- This suggests a new paper direction may be possible, but it must be framed as prior-assisted correction/uncertainty quantification, not as pure random-walk multi-point fusion.
