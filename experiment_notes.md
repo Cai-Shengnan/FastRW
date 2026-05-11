@@ -157,3 +157,42 @@ Immediate observations:
 - FastRW direct runtime is about `6.4x`, `6.5x`, and `6.6x` faster than PIRW for Cases 1/2/3 in this run.
 - Direct errors are sub-kelvin for all rows.
 - Current Onestage post-processing worsens the average absolute error for every row. Do not use fused values in paper tables until this is diagnosed.
+
+## Fusion Diagnostics 1
+
+Command:
+
+```bash
+node scripts/diagnose_fusion_constraints.js
+```
+
+Outputs:
+
+- `outputs/fusion_diagnostics/summary.csv`
+- `outputs/fusion_diagnostics/residual_bins.csv`
+- `outputs/fusion_diagnostics/pair_stats.csv`
+- `outputs/fusion_diagnostics/weight_sweep.csv`
+- `outputs/fusion_diagnostics/diagnostics.md`
+
+The diagnostic checks each pass-through constraint against the reference temperature:
+
+```text
+residual = b_k - (T_ref[i_k] - alpha_k * T_ref[j_k])
+```
+
+Summary:
+
+| Case | Method | K | Self | Direct avg abs error | Current with-self | Current no-self | Constraint residual MAE | Residual abs95 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Case 1 | FastRW | 13097 | 1102 | 0.6503 | 1.5237 | 1.5637 | 10.7257 | 25.6287 |
+| Case 1 | PIRW | 64698 | 4734 | 0.4242 | 1.0016 | 1.0498 | 11.3051 | 26.8198 |
+| Case 2 | FastRW | 10143 | 757 | 0.6209 | 1.2989 | 1.3093 | 12.4520 | 31.6196 |
+| Case 2 | PIRW | 55369 | 3779 | 0.6049 | 1.0575 | 1.0453 | 13.0942 | 32.4397 |
+| Case 3 | FastRW | 16629 | 1163 | 0.5714 | 1.1144 | 1.1580 | 10.0816 | 25.4843 |
+| Case 3 | PIRW | 94814 | 6197 | 0.3637 | 0.7595 | 0.7892 | 11.3044 | 28.3353 |
+
+Best nonzero WLS weight sweeps use `constraint_scale = 0.0001` and produce essentially the direct result. Full current weight `constraint_scale = 1` is consistently worse. Removing self constraints does not fix the problem.
+
+Current interpretation: the pass-through equations are not usable as many independent Gaussian constraints. Individual residuals have roughly the expected large single-sample scale, but their count is huge and the implementation treats same-run, same-path-derived constraints as independent from each other and from the direct estimates. The next diagnostic should record path/sample IDs and step counts for constraints so we can estimate effective sample size and covariance.
+
+A quick pair-mean check, where each `(i,j)` pair is collapsed to one average constraint and then fused at full weight, still did not beat direct. It reduced the damage but did not create a useful gain, so the issue is not only duplicate counting of identical pairs.
