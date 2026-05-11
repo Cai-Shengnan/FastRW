@@ -276,3 +276,36 @@ Next fusion work:
 - Re-run schema-2 diagnostics for PIRW if needed, but prioritize FastRW because it is the intended main method.
 - Investigate why Case 1 benefits much more than Cases 2/3: alpha distribution, tail pseudo-sample variance, target-cell mismatch, and spatial smoothness.
 - Decide whether to remove or reframe old Onestage in the paper; current evidence says the old constraint equation should not be presented as valid without substantial correction.
+
+## Tail-Reuse Postprocessor
+
+Added:
+
+- `scripts/run_tail_reuse_fusion.js`
+
+Default conservative parameters:
+
+```text
+mode = cross_max_alpha_per_path_target
+alpha_min = 0.8
+estimator = variance_shrink
+effective_sample_scale = 0.03
+```
+
+These defaults are reference-free during computation. The script still reports reference errors when `direct.csv` contains `GT_Temperature`.
+
+Command:
+
+```bash
+node scripts/run_tail_reuse_fusion.js <run_dir>
+```
+
+For the three FastRW schema-2 diagnostic runs, the conservative default gives:
+
+| Case | Direct MAE | Conservative tail-reuse MAE | Tail pseudo-samples |
+|---|---:|---:|---:|
+| Case 1 | 0.6503 | 0.6437 | 743 |
+| Case 2 | 0.6209 | 0.6202 | 640 |
+| Case 3 | 0.5713 | 0.5699 | 1033 |
+
+This is intentionally conservative. The reference-selected Case 1 result can be much better, but that should not become the paper/default rule until we have a reference-free parameter choice.
