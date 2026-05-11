@@ -85,6 +85,15 @@ void add_robin_side_diagnostics(RobinPathDiagnostics& diag,
 }
 
 void accumulate_robin_diagnostics(RobinPathDiagnostics& dst, const RobinPathDiagnostics& src) {
+    dst.heat_weighted_reward += src.heat_weighted_reward;
+    dst.heat_unweighted_reward += src.heat_unweighted_reward;
+    dst.heat_e_hat_sum += src.heat_e_hat_sum;
+    dst.heat_visit_count += src.heat_visit_count;
+    dst.heat_reward_nonzero_count += src.heat_reward_nonzero_count;
+    dst.heat_pending_robin_count += src.heat_pending_robin_count;
+    dst.heat_pending_robin_unweighted_reward += src.heat_pending_robin_unweighted_reward;
+    dst.virtual_top_visit_count += src.virtual_top_visit_count;
+    dst.virtual_bottom_visit_count += src.virtual_bottom_visit_count;
     dst.top_hit_count += src.top_hit_count;
     dst.top_near_count += src.top_near_count;
     dst.top_local_time += src.top_local_time;
@@ -103,6 +112,7 @@ void write_robin_diagnostics_to_json(
     const std::vector<MultiPointStats>& stats,
     const std::vector<RobinPathDiagnostics>& diagnostic_sums,
     int N,
+    const std::string& tail_mode,
     const std::string& mode,
     const std::string& filename
 ) {
@@ -110,6 +120,7 @@ void write_robin_diagnostics_to_json(
 
     json j;
     j["samples"] = N;
+    j["tail_mode"] = tail_mode;
     j["robin_local_time_mode"] = mode;
     j["point_diagnostics"] = json::array();
 
@@ -122,6 +133,22 @@ void write_robin_diagnostics_to_json(
         point["y"] = p[1];
         point["z"] = p[0];
         point["normal_mean"] = stats[i].normal_mean;
+        point["heat"] = {
+            {"T0_weighted_mean", sums.heat_weighted_reward / N},
+            {"T0_unweighted_mean", sums.heat_unweighted_reward / N},
+            {"avg_e_hat_on_heat", sums.heat_unweighted_reward > 0.0
+                ? sums.heat_weighted_reward / sums.heat_unweighted_reward : 0.0},
+            {"heat_visit_count_mean", sums.heat_visit_count / N},
+            {"heat_reward_nonzero_count_mean", sums.heat_reward_nonzero_count / N},
+            {"heat_visit_e_hat_mean", sums.heat_visit_count > 0.0
+                ? sums.heat_e_hat_sum / sums.heat_visit_count : 0.0},
+            {"pending_robin_heat_count_mean", sums.heat_pending_robin_count / N},
+            {"pending_robin_heat_fraction", sums.heat_visit_count > 0.0
+                ? sums.heat_pending_robin_count / sums.heat_visit_count : 0.0},
+            {"pending_robin_T0_unweighted_mean", sums.heat_pending_robin_unweighted_reward / N},
+            {"virtual_top_visit_count_mean", sums.virtual_top_visit_count / N},
+            {"virtual_bottom_visit_count_mean", sums.virtual_bottom_visit_count / N}
+        };
         point["robin"] = {
             {"hit_count_mean", (sums.top_hit_count + sums.bottom_hit_count) / N},
             {"near_count_mean", (sums.top_near_count + sums.bottom_near_count) / N},
@@ -152,8 +179,16 @@ void write_robin_diagnostics_to_json(
 
 // RandomWalker constructor
 RandomWalker::RandomWalker(GeometryConfig& geometry_config, double max_steps_, double eps_, double delta_x_, bool use_tail_correction_,
-                           std::string robin_local_time_mode_, std::optional<unsigned int> seed)
+                           std::string robin_local_time_mode_, std::optional<unsigned int> seed, std::string tail_mode_)
 : geom(geometry_config), max_steps(max_steps_), eps(eps_), delta_x(delta_x_), use_tail_correction(use_tail_correction_) {
+    if (tail_mode_ == "gt") {
+        tail_mode = TailMode::Gt;
+    } else if (tail_mode_ == "none") {
+        tail_mode = TailMode::None;
+    } else {
+        throw std::runtime_error("Unknown walker.tail_mode: " + tail_mode_
+            + " (expected \"gt\" or \"none\")");
+    }
     if (robin_local_time_mode_ == "current") {
         robin_local_time_mode = RobinLocalTimeMode::Current;
     } else if (robin_local_time_mode_ == "event") {
@@ -343,6 +378,7 @@ std::vector<MultiPointStats> RandomWalker::simulate_temperature_multi(
         stats[i] = { count, normal_mean, avg_steps };
     }
     write_robin_diagnostics_to_json(start_points, stats, diagnostic_sums, N,
+        tail_mode == TailMode::Gt ? "gt" : "none",
         robin_local_time_mode == RobinLocalTimeMode::Current ? "current" :
         (robin_local_time_mode == RobinLocalTimeMode::Event ? "event" : "hit"),
         diagnostics_json);
@@ -374,7 +410,7 @@ std::tuple<double, std::string, int> RandomWalker::simulate_single_path(const Po
                 double reward = (region == "heat_source") ? get_heat_reward(pos) : 0.0;
                 T_i[0] += e_hat * reward;
                 if(e_hat < eps && region == "heat_source" ){
-                    if(use_tail_correction) {
+                    if(use_tail_correction && tail_mode == TailMode::Gt) {
                         T_i[1] += e_hat * geom.get_temperature_at(pos);
                     }
                     break;
@@ -543,10 +579,29 @@ RandomWalker::simulate_single_path_record(
             if(region == "heat_source" || region == "virtual_top" || region == "virtual_bottom") {
                 double reward = (region == "heat_source") ? get_heat_reward(pos) : 0.0;
                 T_i[0] += e_hat * reward;
+                if (diagnostics != nullptr) {
+                    if (region == "heat_source") {
+                        diagnostics->heat_weighted_reward += e_hat * reward;
+                        diagnostics->heat_unweighted_reward += reward;
+                        diagnostics->heat_e_hat_sum += e_hat;
+                        diagnostics->heat_visit_count += 1.0;
+                        if (reward != 0.0) {
+                            diagnostics->heat_reward_nonzero_count += 1.0;
+                        }
+                        if (in_robin) {
+                            diagnostics->heat_pending_robin_count += 1.0;
+                            diagnostics->heat_pending_robin_unweighted_reward += reward;
+                        }
+                    } else if (region == "virtual_top") {
+                        diagnostics->virtual_top_visit_count += 1.0;
+                    } else if (region == "virtual_bottom") {
+                        diagnostics->virtual_bottom_visit_count += 1.0;
+                    }
+                }
 
                 // FastRW Zixiao
                 if(e_hat < eps && region == "heat_source" ){
-                    if(use_tail_correction) {
+                    if(use_tail_correction && tail_mode == TailMode::Gt) {
                         T_i[1] += e_hat * geom.get_temperature_at(pos);
                     }
                     break;
@@ -714,7 +769,7 @@ double RandomWalker::estimate_local_time_increment(GeometryConfig::BoundaryType 
     // The epsilon (diffusion parameter) for this boundary type
     double epsilon = geom.boundary_epsilon[static_cast<int>(bc_type)];
     double delta = delta_x;
-    // Formula: Δt = δ^2 / (6 * epsilon)
+    // 3D ball-exit convention used by the production FastRW path.
     return (delta * delta) / (6.0 * epsilon);
 }
 
@@ -876,7 +931,7 @@ std::vector<std::array<double, 3>> RandomWalker::simulate_temperature_trace(
 
                 // 原逻辑：在 heat_source 且 e_hat 很小 -> 用 local 温度收尾
                 if (e_hat < eps && region == "heat_source") {
-                    if(use_tail_correction) {
+                    if(use_tail_correction && tail_mode == TailMode::Gt) {
                         T_i[1] += e_hat * geom.get_temperature_at(pos);
                     }
                     // break 前不强行补记录（严格“每隔固定间隙”才记）
@@ -1044,7 +1099,7 @@ RandomWalker::simulate_single_path_random_cutoff(
 
                     // 仍保留你原先的“很小 e_hat 快速收尾”逻辑（可选）
                     if (e_hat < eps) {
-                        if(use_tail_correction) {
+                        if(use_tail_correction && tail_mode == TailMode::Gt) {
                             T_i[1] += e_hat * geom.get_temperature_at(pos);
                         }
                         break;

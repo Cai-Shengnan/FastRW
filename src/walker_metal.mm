@@ -26,7 +26,7 @@ constexpr int kTailModeNone = 1;
 constexpr int kRobinModeCurrent = 0;
 constexpr int kRobinModeEvent = 1;
 constexpr int kRobinModeHit = 2;
-constexpr int kDiagnosticStride = 20;
+constexpr int kDiagnosticStride = 28;
 
 struct MetalGeometryHost {
     int nx;
@@ -98,7 +98,7 @@ constant int BC_ROBIN = 2;
 	constant int ROBIN_MODE_CURRENT = 0;
 	constant int ROBIN_MODE_EVENT = 1;
 	constant int ROBIN_MODE_HIT = 2;
-	constant int DIAG_STRIDE = 20;
+	constant int DIAG_STRIDE = 28;
 
 constant float TWO_PI = 6.28318530717958647692f;
 
@@ -162,6 +162,10 @@ struct PathState {
     float C1;
     float C2;
     float C3;
+    float T0_unweighted;
+    float C0_unweighted;
+    float heat_e_hat_sum;
+    float C_heat_e_hat_sum;
     float e_hat;
     float log_e_hat;
     float log_e_hat_compensation;
@@ -185,6 +189,12 @@ struct PathState {
 	    float robin_log_decay;
 	    float tail_e_hat;
 	    float tail_temperature;
+	    int heat_visit_count;
+	    int heat_reward_nonzero_count;
+	    int heat_pending_robin_count;
+	    int virtual_top_visit_count;
+	    int virtual_bottom_visit_count;
+	    float heat_pending_robin_unweighted_reward;
 	    uint rng;
 	};
 
@@ -547,6 +557,10 @@ kernel void simulate_paths_kernel(
     s.C1 = 0.0f;
     s.C2 = 0.0f;
     s.C3 = 0.0f;
+    s.T0_unweighted = 0.0f;
+    s.C0_unweighted = 0.0f;
+    s.heat_e_hat_sum = 0.0f;
+    s.C_heat_e_hat_sum = 0.0f;
     s.e_hat = 1.0f;
     s.log_e_hat = 0.0f;
     s.log_e_hat_compensation = 0.0f;
@@ -570,6 +584,12 @@ kernel void simulate_paths_kernel(
 	    s.robin_log_decay = 0.0f;
 	    s.tail_e_hat = 0.0f;
 	    s.tail_temperature = 0.0f;
+	    s.heat_visit_count = 0;
+	    s.heat_reward_nonzero_count = 0;
+	    s.heat_pending_robin_count = 0;
+	    s.virtual_top_visit_count = 0;
+	    s.virtual_bottom_visit_count = 0;
+	    s.heat_pending_robin_unweighted_reward = 0.0f;
 	    s.rng = pcg_hash(g.seed ^ (tid * 747796405u + 2891336453u));
 
     while (s.step_count < g.max_steps) {
@@ -582,7 +602,18 @@ kernel void simulate_paths_kernel(
         if (!near) {
             if (region == REGION_HEAT || region == REGION_VIRTUAL_TOP || region == REGION_VIRTUAL_BOTTOM) {
                 if (region == REGION_HEAT) {
-	                    add_compensated(s.T0, s.C0, s.e_hat * get_heat_reward(g, power, s));
+	                    float heat_reward = get_heat_reward(g, power, s);
+	                    add_compensated(s.T0, s.C0, s.e_hat * heat_reward);
+	                    add_compensated(s.T0_unweighted, s.C0_unweighted, heat_reward);
+	                    add_compensated(s.heat_e_hat_sum, s.C_heat_e_hat_sum, s.e_hat);
+	                    s.heat_visit_count += 1;
+	                    if (heat_reward != 0.0f) {
+	                        s.heat_reward_nonzero_count += 1;
+	                    }
+	                    if (s.in_robin) {
+	                        s.heat_pending_robin_count += 1;
+	                        s.heat_pending_robin_unweighted_reward += heat_reward;
+	                    }
 	                    if (s.e_hat < g.cutoff_weight) {
 	                        int iz = static_cast<int>(floor(s.z / g.z_resolution)) - g.z_heat_start;
 	                        int iy = static_cast<int>(floor(s.y / g.xy_resolution));
@@ -596,6 +627,10 @@ kernel void simulate_paths_kernel(
 	                        }
 	                        break;
 	                    }
+                } else if (region == REGION_VIRTUAL_TOP) {
+                    s.virtual_top_visit_count += 1;
+                } else if (region == REGION_VIRTUAL_BOTTOM) {
+                    s.virtual_bottom_visit_count += 1;
                 }
                 step_wog(g, s);
             } else {
@@ -689,6 +724,14 @@ kernel void simulate_paths_kernel(
 	    diagnostics[diag_base + 17] = s.bottom_T3;
 	    diagnostics[diag_base + 18] = exp(s.robin_log_decay);
 	    diagnostics[diag_base + 19] = s.top_local_time + s.bottom_local_time;
+	    diagnostics[diag_base + 20] = s.T0_unweighted;
+	    diagnostics[diag_base + 21] = s.heat_e_hat_sum;
+	    diagnostics[diag_base + 22] = static_cast<float>(s.heat_visit_count);
+	    diagnostics[diag_base + 23] = static_cast<float>(s.heat_reward_nonzero_count);
+	    diagnostics[diag_base + 24] = static_cast<float>(s.heat_pending_robin_count);
+	    diagnostics[diag_base + 25] = s.heat_pending_robin_unweighted_reward;
+	    diagnostics[diag_base + 26] = static_cast<float>(s.virtual_top_visit_count);
+	    diagnostics[diag_base + 27] = static_cast<float>(s.virtual_bottom_visit_count);
 	}
 )MSL";
 
@@ -827,6 +870,11 @@ void write_metal_diagnostics_to_json(
         double t2 = diagnostic_sums[base + 2] / N;
         double t3 = diagnostic_sums[base + 3] / N;
         double cutoff_total = diagnostic_sums[base + 4];
+        double heat_unweighted = diagnostic_sums[base + 20] / N;
+        double heat_e_hat_sum = diagnostic_sums[base + 21];
+        double heat_visit_total = diagnostic_sums[base + 22];
+        double heat_reward_nonzero_total = diagnostic_sums[base + 23];
+        double pending_robin_heat_total = diagnostic_sums[base + 24];
         double component_sum = t0 + t1 + t2 + t3;
         const auto& p = start_points[i];
 
@@ -843,6 +891,20 @@ void write_metal_diagnostics_to_json(
             {"T1_tail_or_dirichlet", t1},
             {"T2_neumann", t2},
             {"T3_robin", t3}
+        };
+        point["heat"] = {
+            {"T0_weighted_mean", t0},
+            {"T0_unweighted_mean", heat_unweighted},
+            {"avg_e_hat_on_heat", heat_unweighted > 0.0 ? t0 / heat_unweighted : 0.0},
+            {"heat_visit_count_mean", heat_visit_total / N},
+            {"heat_reward_nonzero_count_mean", heat_reward_nonzero_total / N},
+            {"heat_visit_e_hat_mean", heat_visit_total > 0.0 ? heat_e_hat_sum / heat_visit_total : 0.0},
+            {"pending_robin_heat_count_mean", pending_robin_heat_total / N},
+            {"pending_robin_heat_fraction", heat_visit_total > 0.0
+                ? pending_robin_heat_total / heat_visit_total : 0.0},
+            {"pending_robin_T0_unweighted_mean", diagnostic_sums[base + 25] / N},
+            {"virtual_top_visit_count_mean", diagnostic_sums[base + 26] / N},
+            {"virtual_bottom_visit_count_mean", diagnostic_sums[base + 27] / N}
         };
         point["cutoff"] = {
             {"count_total", cutoff_total},
@@ -1184,7 +1246,8 @@ RandomWalkerMetal::RandomWalkerMetal(GeometryConfig& geometry_config, double max
                                      std::string tail_mode,
                                      std::string robin_local_time_mode)
 : impl(std::make_unique<Impl>(geometry_config, max_steps, cutoff_weight, delta_x,
-                              use_tail_correction, seed, power_scale, tail_mode, robin_local_time_mode)) {}
+                              use_tail_correction, seed, power_scale, tail_mode,
+                              robin_local_time_mode)) {}
 
 RandomWalkerMetal::~RandomWalkerMetal() = default;
 

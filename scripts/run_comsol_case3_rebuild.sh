@@ -12,12 +12,14 @@ COMPILE_ONLY=0
 PREPARE_ONLY=0
 SMOKE_MODE=0
 OUT_DIR_SET=0
+CONFIG_REL="configs/case3_16core.json"
 
 usage() {
   cat <<'USAGE'
 Usage: scripts/run_comsol_case3_rebuild.sh [options]
 
 Options:
+  --config FILE        Case config to solve. Default: configs/case3_16core.json.
   --compile-only       Only run `comsol compile`; do not execute batch.
   --prepare-only       Run Java class with COMSOL_CASE3_SKIP_SOLVE=1.
   --smoke              Use a coarse mesh and default to outputs/comsol_case3_rebuild_smoke.
@@ -39,6 +41,10 @@ while [[ $# -gt 0 ]]; do
     --compile-only)
       COMPILE_ONLY=1
       shift
+      ;;
+    --config)
+      CONFIG_REL="$2"
+      shift 2
       ;;
     --prepare-only)
       PREPARE_ONLY=1
@@ -99,6 +105,16 @@ fi
 if [[ "${OUT_DIR}" != /* ]]; then
   OUT_DIR="${ROOT_DIR}/${OUT_DIR}"
 fi
+if [[ "${CONFIG_REL}" == /* ]]; then
+  CONFIG_FILE="${CONFIG_REL}"
+  CONFIG_REL="${CONFIG_FILE#${ROOT_DIR}/}"
+else
+  CONFIG_FILE="${ROOT_DIR}/${CONFIG_REL}"
+fi
+if [[ ! -f "${CONFIG_FILE}" ]]; then
+  echo "Missing case config: ${CONFIG_FILE}" >&2
+  exit 2
+fi
 if [[ -z "${PREFS_DIR}" ]]; then
   PREFS_DIR="${OUT_DIR}/comsol_prefs"
 elif [[ "${PREFS_DIR}" != /* ]]; then
@@ -148,6 +164,7 @@ cp "${SRC_FILE}" "${BUILD_SRC}"
 
 ROOT_JAVA="$(java_literal "${ROOT_DIR}")"
 OUT_JAVA="$(java_literal "${OUT_DIR}")"
+CONFIG_JAVA="$(java_literal "${CONFIG_REL}")"
 SKIP_JAVA="false"
 if [[ "${PREPARE_ONLY}" == "1" ]]; then
   SKIP_JAVA="true"
@@ -157,6 +174,7 @@ if [[ "${SMOKE_MODE}" == "1" ]]; then
   SMOKE_JAVA="true"
 fi
 perl -0pi -e "s#private static final String DEFAULT_REPO_ROOT = \".*?\";#private static final String DEFAULT_REPO_ROOT = \"${ROOT_JAVA}\";#s" "${BUILD_SRC}"
+perl -0pi -e "s#private static final String CONFIG_REL = \".*?\";#private static final String CONFIG_REL = \"${CONFIG_JAVA}\";#s" "${BUILD_SRC}"
 perl -0pi -e "s#private static final String BUILD_OUTPUT_DIR = \".*?\";#private static final String BUILD_OUTPUT_DIR = \"${OUT_JAVA}\";#s" "${BUILD_SRC}"
 perl -0pi -e "s#private static final boolean BUILD_SKIP_SOLVE = (true|false);#private static final boolean BUILD_SKIP_SOLVE = ${SKIP_JAVA};#s" "${BUILD_SRC}"
 perl -0pi -e "s#private static final boolean BUILD_SMOKE_MODE = (true|false);#private static final boolean BUILD_SMOKE_MODE = ${SMOKE_JAVA};#s" "${BUILD_SRC}"

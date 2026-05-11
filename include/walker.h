@@ -44,6 +44,15 @@ struct MultiPointStats {
 };
 
 struct RobinPathDiagnostics {
+    double heat_weighted_reward = 0.0;
+    double heat_unweighted_reward = 0.0;
+    double heat_e_hat_sum = 0.0;
+    double heat_visit_count = 0.0;
+    double heat_reward_nonzero_count = 0.0;
+    double heat_pending_robin_count = 0.0;
+    double heat_pending_robin_unweighted_reward = 0.0;
+    double virtual_top_visit_count = 0.0;
+    double virtual_bottom_visit_count = 0.0;
     double top_hit_count = 0.0;
     double top_near_count = 0.0;
     double top_local_time = 0.0;
@@ -64,7 +73,8 @@ public:
                  double cutoff_weight = 0.01, double delta_x = 5e-7,
                  bool use_tail_correction = true,
                  std::string robin_local_time_mode = "current",
-                 std::optional<unsigned int> seed = std::nullopt);
+                 std::optional<unsigned int> seed = std::nullopt,
+                 std::string tail_mode = "gt");
 
     // Run N random walk simulations to estimate temperature (expected value).
     // Returns the average result of simulate_single_path over N runs.
@@ -113,6 +123,8 @@ private:
     double eps;               // Termination threshold for e_hat (Feynman-Kac weight)
     double delta_x;           // WOS jump radius near boundaries (Δx)
     bool use_tail_correction; // FastRW uses prior tail correction; PIRW drops the tail.
+    enum class TailMode { Gt, None };
+    TailMode tail_mode;
     enum class RobinLocalTimeMode { Current, Event, Hit };
     RobinLocalTimeMode robin_local_time_mode;
 

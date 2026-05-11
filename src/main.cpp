@@ -95,7 +95,8 @@ int main(int argc, char** argv) {
         config.walker.delta_x,
         config.walker.use_tail_correction,
         config.walker.robin_local_time_mode,
-        config.run.seed
+        config.run.seed,
+        config.walker.tail_mode
     );
 
     std::vector<Position> points = config.make_query_points();
