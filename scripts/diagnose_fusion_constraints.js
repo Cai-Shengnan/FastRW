@@ -214,8 +214,26 @@ function computeFusion(data, options = {}) {
   };
 }
 
-function discoverRuns() {
+function discoverRuns(explicitRunDirs = []) {
   const runs = [];
+  if (explicitRunDirs.length) {
+    for (const runDirArg of explicitRunDirs) {
+      const runDir = path.resolve(runDirArg);
+      const constraintsPath = path.join(runDir, "constraints.json");
+      const directPath = path.join(runDir, "direct.csv");
+      if (!fs.existsSync(constraintsPath) || !fs.existsSync(directPath)) {
+        throw new Error(`Expected constraints.json and direct.csv in ${runDir}`);
+      }
+      runs.push({
+        caseName: path.basename(path.dirname(runDir)),
+        method: path.basename(runDir),
+        runDir,
+        constraintsPath,
+        directPath,
+      });
+    }
+    return runs;
+  }
   if (!fs.existsSync(OUTPUTS_DIR)) return runs;
   for (const caseName of fs.readdirSync(OUTPUTS_DIR)) {
     if (caseName === "fusion_diagnostics") continue;
@@ -254,10 +272,18 @@ function computeResidualRows(run, data, directRows) {
   const allResiduals = [];
   const byBucket = new Map();
   const pairMap = new Map();
+  const pathMap = new Map();
   const alphaValues = [];
   const bValues = [];
   const tauValues = [];
   const sigma = computeSigma(data);
+  const hasPathMetadata =
+    Array.isArray(data.sample_k) &&
+    Array.isArray(data.step_k) &&
+    Array.isArray(data.record_k) &&
+    data.sample_k.length === data.K &&
+    data.step_k.length === data.K &&
+    data.record_k.length === data.K;
 
   for (let k = 0; k < data.K; k++) {
     const i = data.i_k[k] - 1;
@@ -286,6 +312,28 @@ function computeResidualRows(run, data, directRows) {
     pair.alpha.push(alpha);
     pair.b.push(b);
     pair.tau.push(tau);
+
+    if (hasPathMetadata) {
+      const sample = data.sample_k[k];
+      const pathKey = `${i + 1}:${sample}`;
+      if (!pathMap.has(pathKey)) {
+        pathMap.set(pathKey, {
+          i: i + 1,
+          sample,
+          residuals: [],
+          alpha: [],
+          tau: [],
+          steps: [],
+          records: [],
+        });
+      }
+      const pathStats = pathMap.get(pathKey);
+      pathStats.residuals.push(residual);
+      pathStats.alpha.push(alpha);
+      pathStats.tau.push(tau);
+      pathStats.steps.push(data.step_k[k]);
+      pathStats.records.push(data.record_k[k]);
+    }
   }
 
   const residualRows = [];
@@ -336,7 +384,33 @@ function computeResidualRows(run, data, directRows) {
     return Math.abs(b.residual_mean) - Math.abs(a.residual_mean);
   });
 
-  return { residualRows, pairRows, allResiduals, alphaValues, tauValues };
+  const pathRows = Array.from(pathMap.values()).map((pathStats) => {
+    const s = summarizeValues(pathStats.residuals);
+    return {
+      case: run.caseName,
+      method: run.method,
+      i: pathStats.i,
+      sample: pathStats.sample,
+      count: s.count,
+      residual_mean: s.mean,
+      residual_sd: s.sd,
+      residual_mae: s.mae,
+      residual_rmse: s.rmse,
+      residual_abs95: s.abs95,
+      alpha_mean: mean(pathStats.alpha),
+      tau_mean: mean(pathStats.tau),
+      step_min: Math.min(...pathStats.steps),
+      step_max: Math.max(...pathStats.steps),
+      record_min: Math.min(...pathStats.records),
+      record_max: Math.max(...pathStats.records),
+    };
+  }).sort((a, b) => {
+    const byCount = b.count - a.count;
+    if (byCount !== 0) return byCount;
+    return Math.abs(b.residual_mean) - Math.abs(a.residual_mean);
+  });
+
+  return { residualRows, pairRows, pathRows, allResiduals, alphaValues, tauValues };
 }
 
 function sweepFusion(run, data, directRows) {
@@ -425,6 +499,17 @@ function writeMarkdown(summaryRows, residualRows, sweepRows) {
     lines.push(`| ${row.case} | ${row.method} | ${row.K} | ${row.self_constraints} | ${fmt(row.direct_avg_abs_error)} | ${fmt(row.current_with_self_avg_abs_error)} | ${fmt(row.current_no_self_avg_abs_error)} | ${fmt(row.residual_mae)} | ${fmt(row.residual_mean)} | ${fmt(row.residual_abs95)} |`);
   }
   lines.push("");
+  const hasPathRows = summaryRows.some((row) => row.constraint_paths);
+  if (hasPathRows) {
+    lines.push("## Path Metadata Summary");
+    lines.push("");
+    lines.push("| Case | Method | Active Paths | Active Path Fraction | Constraints Per Active Path | Path-Mean Residual MAE |");
+    lines.push("|---|---:|---:|---:|---:|---:|");
+    for (const row of summaryRows) {
+      lines.push(`| ${row.case} | ${row.method} | ${row.constraint_paths ?? ""} | ${fmt(row.active_path_fraction)} | ${fmt(row.constraints_per_path_mean)} | ${fmt(row.path_mean_residual_mae)} |`);
+    }
+    lines.push("");
+  }
   lines.push("## Best Nonzero Weight Sweep Per Run");
   lines.push("");
   lines.push("| Run | Direct MAE | Best Fused MAE | Include Self | Alpha Max | Constraint Scale | Used Constraints |");
@@ -437,6 +522,7 @@ function writeMarkdown(summaryRows, residualRows, sweepRows) {
   lines.push("");
   lines.push("- `residual = b_k - (T_ref[i_k] - alpha_k * T_ref[j_k])`.");
   lines.push("- `constraint_scale = 1` matches the current Onestage WLS implementation.");
+  lines.push("- `sample_k`, `step_k`, and `record_k` are used when available to group constraints by source path.");
   lines.push("- This diagnostic uses reference temperatures only to evaluate variants; production fusion cannot use these labels.");
   fs.writeFileSync(path.join(DIAG_DIR, "diagnostics.md"), `${lines.join("\n")}\n`);
 }
@@ -448,7 +534,7 @@ function fmt(value) {
 
 function main() {
   fs.mkdirSync(DIAG_DIR, { recursive: true });
-  const runs = discoverRuns();
+  const runs = discoverRuns(process.argv.slice(2));
   if (!runs.length) {
     throw new Error(`No runs found under ${OUTPUTS_DIR}`);
   }
@@ -456,6 +542,7 @@ function main() {
   const summaryRows = [];
   const residualRows = [];
   const pairRows = [];
+  const pathRows = [];
   const sweepRows = [];
 
   for (const run of runs) {
@@ -463,9 +550,12 @@ function main() {
     const residual = computeResidualRows(run, data, directRows);
     residualRows.push(...residual.residualRows);
     pairRows.push(...residual.pairRows);
+    pathRows.push(...residual.pathRows);
     sweepRows.push(...sweepFusion(run, data, directRows));
 
     const all = residual.residualRows.find((row) => row.bucket === "all");
+    const constraintsPerPath = residual.pathRows.map((row) => row.count);
+    const pathMeanResiduals = residual.pathRows.map((row) => row.residual_mean);
     const summaryPath = path.join(run.runDir, "summary.json");
     const current = fs.existsSync(summaryPath) ? JSON.parse(fs.readFileSync(summaryPath, "utf8")) : null;
     const directTheta = directRows.map((row) => normalizeDirectRow(row).Direct_Mean);
@@ -490,6 +580,12 @@ function main() {
       alpha_q50: all.alpha_q50,
       alpha_q95: all.alpha_q95,
       tau_mean: all.tau_mean,
+      constraint_paths: residual.pathRows.length || null,
+      active_path_fraction: residual.pathRows.length ? residual.pathRows.length / (data.M * data.N) : null,
+      constraints_per_path_mean: constraintsPerPath.length ? mean(constraintsPerPath) : null,
+      constraints_per_path_q95: constraintsPerPath.length ? quantile(constraintsPerPath, 0.95) : null,
+      constraints_per_path_max: constraintsPerPath.length ? Math.max(...constraintsPerPath) : null,
+      path_mean_residual_mae: pathMeanResiduals.length ? mean(pathMeanResiduals.map(Math.abs)) : null,
     });
   }
 
@@ -498,6 +594,8 @@ function main() {
     "direct_avg_abs_error", "current_with_self_avg_abs_error", "current_no_self_avg_abs_error",
     "residual_mean", "residual_sd", "residual_mae", "residual_rmse", "residual_abs95",
     "alpha_mean", "alpha_q50", "alpha_q95", "tau_mean",
+    "constraint_paths", "active_path_fraction", "constraints_per_path_mean",
+    "constraints_per_path_q95", "constraints_per_path_max", "path_mean_residual_mae",
   ]);
   writeCsv(path.join(DIAG_DIR, "residual_bins.csv"), residualRows, [
     "case", "method", "bucket", "count", "residual_mean", "residual_sd", "residual_mae",
@@ -507,6 +605,11 @@ function main() {
   writeCsv(path.join(DIAG_DIR, "pair_stats.csv"), pairRows, [
     "case", "method", "i", "j", "count", "residual_mean", "residual_sd", "residual_mae",
     "residual_rmse", "residual_abs95", "alpha_mean", "alpha_q50", "b_mean", "tau_mean",
+  ]);
+  writeCsv(path.join(DIAG_DIR, "path_stats.csv"), pathRows, [
+    "case", "method", "i", "sample", "count", "residual_mean", "residual_sd",
+    "residual_mae", "residual_rmse", "residual_abs95", "alpha_mean", "tau_mean",
+    "step_min", "step_max", "record_min", "record_max",
   ]);
   writeCsv(path.join(DIAG_DIR, "weight_sweep.csv"), sweepRows, [
     "case", "method", "label", "include_self", "alpha_min", "alpha_max", "constraint_scale",

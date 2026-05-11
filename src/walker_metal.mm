@@ -33,9 +33,11 @@ struct MetalPassRecordHost {
     int target_index;
     float t_sum;
     float e_hat;
+    int step_count;
+    int record_index;
 };
 
-static_assert(sizeof(MetalPassRecordHost) == 12,
+static_assert(sizeof(MetalPassRecordHost) == 20,
               "MetalPassRecordHost must match the Metal PassRecord layout.");
 
 struct MetalGeometryHost {
@@ -165,6 +167,8 @@ struct PassRecord {
     int target_index;
     float t_sum;
     float e_hat;
+    int step_count;
+    int record_index;
 };
 
 struct PathState {
@@ -648,6 +652,8 @@ kernel void simulate_paths_kernel(
 	                                pass_records[out_index].target_index = target_index;
 	                                pass_records[out_index].t_sum = s.T0 + s.T1 + s.T2 + s.T3 + s.e_hat * heat_reward;
 	                                pass_records[out_index].e_hat = s.e_hat;
+	                                pass_records[out_index].step_count = s.step_count;
+	                                pass_records[out_index].record_index = record_index;
 	                            } else {
 	                                pass_overflow = 1;
 	                            }
@@ -865,6 +871,9 @@ void write_constraints_to_json(
     std::vector<int> j_k;
     std::vector<double> alpha_k;
     std::vector<double> b_k;
+    std::vector<int> sample_k;
+    std::vector<int> step_k;
+    std::vector<int> record_k;
 
     for (int i = 0; i < static_cast<int>(all_pass_samples.size()); ++i) {
         for (const auto& ps : all_pass_samples[i]) {
@@ -872,6 +881,9 @@ void write_constraints_to_json(
             j_k.push_back(ps.target_index + 1);
             alpha_k.push_back(ps.e_hat);
             b_k.push_back(ps.t_sum);
+            sample_k.push_back(ps.sample_index + 1);
+            step_k.push_back(ps.step_count);
+            record_k.push_back(ps.record_index + 1);
         }
     }
     int self_constraints = 0;
@@ -880,6 +892,7 @@ void write_constraints_to_json(
     }
 
     json j;
+    j["constraint_schema_version"] = 2;
     j["M"] = M;
     j["N"] = N;
     j["K"] = static_cast<int>(i_k.size());
@@ -887,6 +900,9 @@ void write_constraints_to_json(
     j["j_k"] = j_k;
     j["alpha_k"] = alpha_k;
     j["b_k"] = b_k;
+    j["sample_k"] = sample_k;
+    j["step_k"] = step_k;
+    j["record_k"] = record_k;
     j["obs_data"] = obs_data;
     j["self_constraints"] = self_constraints;
     j["pass_overflow_paths"] = pass_overflow_paths;
@@ -1318,7 +1334,10 @@ struct RandomWalkerMetal::Impl {
 		                            all_pass_samples[i].push_back({
 		                                record.target_index,
 		                                static_cast<double>(record.t_sum),
-		                                static_cast<double>(record.e_hat)
+		                                static_cast<double>(record.e_hat),
+		                                sample_index,
+		                                record.step_count,
+		                                record.record_index
 		                            });
 		                        }
 		                    }

@@ -31,6 +31,9 @@ void write_constraints_to_json(
     std::vector<int> j_k;
     std::vector<double> alpha_k;
     std::vector<double> b_k;
+    std::vector<int> sample_k;
+    std::vector<int> step_k;
+    std::vector<int> record_k;
 
     for (int i = 0; i < all_pass_samples.size(); ++i) {
         for (const auto& ps : all_pass_samples[i]) {
@@ -38,6 +41,9 @@ void write_constraints_to_json(
             j_k.push_back(ps.target_index + 1);
             alpha_k.push_back(ps.e_hat);
             b_k.push_back(ps.t_sum);
+            sample_k.push_back(ps.sample_index + 1);
+            step_k.push_back(ps.step_count);
+            record_k.push_back(ps.record_index + 1);
         }
     }
     int self_constraints = 0;
@@ -46,6 +52,7 @@ void write_constraints_to_json(
     }
 
     json j;
+    j["constraint_schema_version"] = 2;
     j["M"] = M;
     j["N"] = N;
     j["K"] = static_cast<int>(i_k.size());
@@ -54,6 +61,9 @@ void write_constraints_to_json(
     j["j_k"] = j_k;
     j["alpha_k"] = alpha_k;
     j["b_k"] = b_k;
+    j["sample_k"] = sample_k;
+    j["step_k"] = step_k;
+    j["record_k"] = record_k;
     j["self_constraints"] = self_constraints;
     j["pass_overflow_paths"] = 0;
 
@@ -332,7 +342,7 @@ std::vector<MultiPointStats> RandomWalker::simulate_temperature_multi(
                 int n = task_idx % N;
 
                 RobinPathDiagnostics path_diag;
-                auto result = simulate_single_path_record(start_points[i], target_map, &path_diag);
+                auto result = simulate_single_path_record(start_points[i], target_map, n, &path_diag);
                 path_diag.robin_decay = std::exp(path_diag.robin_log_decay);
                 double T_val = std::get<0>(result);
                 const auto& passes = std::get<1>(result);
@@ -511,6 +521,7 @@ std::tuple<double, std::vector<PassSample>, int>
 RandomWalker::simulate_single_path_record(
     const Position& x0_meter,
     const std::unordered_map<GridIndex,int,GridIndexHash>& target_map,
+    int sample_index,
     RobinPathDiagnostics* diagnostics) {
     Position pos = x0_meter;
     double T_i[4] = {0.0, 0.0, 0.0, 0.0};
@@ -549,7 +560,14 @@ RandomWalker::simulate_single_path_record(
                 if(std::abs(1.0 - e_hat) > 0.1) {
                     double reward = get_heat_reward(pos);
                     double t_sum = T_i[0] + T_i[1] + T_i[2] + T_i[3] + e_hat * reward;
-                    pass_samples.push_back({it->second, t_sum, e_hat});
+                    pass_samples.push_back({
+                        it->second,
+                        t_sum,
+                        e_hat,
+                        sample_index,
+                        step_count,
+                        static_cast<int>(pass_samples.size())
+                    });
                     last_record = step_count;
                 }
             }

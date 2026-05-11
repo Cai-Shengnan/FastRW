@@ -35,6 +35,9 @@ struct PassSample {
     int target_index;  // index of point Y that the path passed through
     double t_sum;      // partial sum when hitting Y
     double e_hat;      // accumulated weight when hitting Y
+    int sample_index;  // zero-based source sample/path index
+    int step_count;    // path step count when the pass-through was recorded
+    int record_index;  // zero-based record order within the source path
 };
 
 struct MultiPointStats {
@@ -137,6 +140,7 @@ private:
     simulate_single_path_record(
         const Position& x0_meter,
         const std::unordered_map<GridIndex,int,GridIndexHash>& target_map,
+        int sample_index,
         RobinPathDiagnostics* diagnostics = nullptr);
 
     // Single path: sample until cutoff condition in heat_source is met.

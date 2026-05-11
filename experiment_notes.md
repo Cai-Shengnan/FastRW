@@ -196,3 +196,83 @@ Best nonzero WLS weight sweeps use `constraint_scale = 0.0001` and produce essen
 Current interpretation: the pass-through equations are not usable as many independent Gaussian constraints. Individual residuals have roughly the expected large single-sample scale, but their count is huge and the implementation treats same-run, same-path-derived constraints as independent from each other and from the direct estimates. The next diagnostic should record path/sample IDs and step counts for constraints so we can estimate effective sample size and covariance.
 
 A quick pair-mean check, where each `(i,j)` pair is collapsed to one average constraint and then fused at full weight, still did not beat direct. It reduced the damage but did not create a useful gain, so the issue is not only duplicate counting of identical pairs.
+
+## Fusion Diagnostics 2: Path Metadata
+
+Change:
+
+- `constraints.json` now records `constraint_schema_version = 2`.
+- Existing fields are preserved: `i_k`, `j_k`, `alpha_k`, `b_k`, `obs_data`.
+- New fields:
+  - `sample_k`: 1-based source sample/path index.
+  - `step_k`: path step count at pass-through recording.
+  - `record_k`: 1-based record order within that source path.
+
+Validation:
+
+- CPU and Metal targets both build.
+- Metal `N=2` smoke writes non-empty path metadata and old Onestage still runs.
+- CPU single-run smoke writes schema-2 metadata arrays; a 16-point shortened CPU smoke produced nonzero constraints.
+
+Schema-2 FastRW diagnostic reruns:
+
+| Case | K | Active source paths | Constraints per active path | Direct MAE | Old Onestage with-self MAE | Old Onestage no-self MAE |
+|---|---:|---:|---:|---:|---:|---:|
+| Case 1 | 13097 | 4675 / 6400 | 2.80 | 0.6503 | 1.5237 | 1.5637 |
+| Case 2 | 10143 | 4314 / 6400 | 2.35 | 0.6209 | 1.2989 | 1.3093 |
+| Case 3 | 16629 | 5107 / 6400 | 3.26 | 0.5714 | 1.1144 | 1.1580 |
+
+The path metadata confirms that many constraints come from the same finite set of source paths. This supports the correlation concern, but the larger issue appears theoretical: the old equation treats a conditional pass-through partial sum as an unconditional expectation constraint.
+
+## Fusion Theory Note: Tail-Reuse Alternative
+
+Old Onestage uses:
+
+```text
+theta_i - alpha_k theta_j = b_k + noise
+```
+
+This is probably not the right estimating equation. A pass-through record exists only after conditioning on a path from `i` hitting a target cell near `j`. The partial sum `b_k` is path-specific, so it is not generally an unbiased observation of `theta_i - alpha_k theta_j`.
+
+A more defensible identity uses the full source-path sample `X_{i,n}` from `obs_data`:
+
+```text
+X_{i,n} = b_k + alpha_k Z_{j,k}
+Z_{j,k} = (X_{i,n} - b_k) / alpha_k
+```
+
+Here `Z_{j,k}` is an approximate pseudo-sample for `theta_j`, subject to target-cell approximation, alpha filtering, and path correlation. This turns pass-through reuse into sample augmentation for the target point instead of a graph constraint between unconditional means.
+
+Command:
+
+```bash
+node scripts/diagnose_tail_reuse_fusion.js \
+  outputs/fusion_diagnostics/case1_fastrw_schema2_full \
+  outputs/fusion_diagnostics/case2_fastrw_schema2_full \
+  outputs/fusion_diagnostics/case3_fastrw_schema2_full
+```
+
+Output:
+
+- `outputs/fusion_diagnostics/tail_reuse_summary.csv`
+
+Best diagnostic result per FastRW case:
+
+| Case | Direct MAE | Old Onestage with-self MAE | Best tail-reuse MAE | Best diagnostic variant |
+|---|---:|---:|---:|---|
+| Case 1 | 0.6503 | 1.5237 | 0.2794 | variance shrink, all records, `alpha >= 0.3`, scale `1` |
+| Case 2 | 0.6209 | 1.2989 | 0.6027 | pooled mean, cross max-alpha per path-target, `alpha >= 0.8` |
+| Case 3 | 0.5714 | 1.1144 | 0.5699 | variance shrink, cross max-alpha per path-target, `alpha >= 0.8`, scale `0.03` |
+
+Interpretation:
+
+- The pass-through information is not useless: Case 1 improves strongly under the tail-reuse identity.
+- The improvement is not yet robust across cases; Case 2 and Case 3 only improve marginally in this first diagnostic sweep.
+- Parameters were selected using reference errors in this diagnostic. Production use needs a reference-free rule, likely based on alpha thresholding, empirical tail variance, and conservative effective sample size.
+
+Next fusion work:
+
+- Add a production tail-reuse postprocessor that writes direct, tail-reuse, and diagnostic summaries without using reference to choose parameters.
+- Re-run schema-2 diagnostics for PIRW if needed, but prioritize FastRW because it is the intended main method.
+- Investigate why Case 1 benefits much more than Cases 2/3: alpha distribution, tail pseudo-sample variance, target-cell mismatch, and spatial smoothness.
+- Decide whether to remove or reframe old Onestage in the paper; current evidence says the old constraint equation should not be presented as valid without substantial correction.
