@@ -22,7 +22,7 @@ Case 2 is the renamed previous 4-core top/bottom 1 mm setup. The old paper Case 
 - Main backend: Metal.
 - CPU backend: build/smoke validation only.
 - PIRW: no tail correction, `Lambda=1e-4`, `1000` paths for full rerun.
-- FastRW: default prior `comso_12500`, `Lambda=0.03`, `400` paths for full rerun.
+- FastRW: default actual-DoF priors `comso_10254` / `comso_10433` / `comso_10316` for Cases 1 / 2 / 3, `Lambda=0.03`, `400` paths for full rerun.
 - Weak-prior experiment: uniform average-temperature prior, `Lambda=0.001`.
 
 ## Active Data Layout
@@ -41,11 +41,11 @@ Current power totals:
 
 Current COMSOL fields:
 
-- Case 1: `comso_1875`, `comso_4800`, `comso_12500`, `comso_32000`, `comso_86247`, `comso_full`.
-- Case 2: `comso_1875`, `comso_4800`, `comso_12500`, `comso_32000`, `comso_86247`, `comso_full`.
-- Case 3: `comso_1875`, `comso_4800`, `comso_12500`, `comso_full`.
+- Case 1: `comso_392`, `comso_699`, `comso_1288`, `comso_2856`, `comso_6253`, `comso_10254`, `comso_15273`, `comso_22369`, `comso_39759`, `comso_full`.
+- Case 2: `comso_471`, `comso_691`, `comso_1296`, `comso_2779`, `comso_6015`, `comso_10433`, `comso_18771`, `comso_25820`, `comso_39341`, `comso_48666`, `comso_144851`, `comso_480945`, `comso_2139473`, `comso_2164400`, `comso_full`.
+- Case 3: `comso_435`, `comso_681`, `comso_1305`, `comso_2841`, `comso_6144`, `comso_10316`, `comso_17035`, `comso_24196`, `comso_39533`, `comso_full`.
 
-Case 3 still lacks `comso_32000` and `comso_86247` unless we decide to generate or map additional approximate priors.
+For generated priors, `comso_<number>` means actual COMSOL solution DoF. Legacy prior directories without actual DoF metadata were deleted.
 
 ## Config And Output Contract
 
@@ -82,9 +82,9 @@ Each FastRW/PIRW run writes:
 
 ## COMSOL Notes
 
-Case 2 rough prior fields were generated locally with `/Applications/COMSOL62/Multiphysics/bin/comsol`.
+Historical Case 2 rough prior fields were generated locally with `/Applications/COMSOL62/Multiphysics/bin/comsol`.
 
-Observed solution DoFs from logs:
+Observed solution DoFs from logs before actual-DoF rename:
 
 - `comso_1875`: `48666`.
 - `comso_4800`: `144851`.
@@ -93,7 +93,7 @@ Observed solution DoFs from logs:
 - `comso_86247`: `2139473`.
 - `comso_full`: `3315624`.
 
-The directory labels remain the intended prior levels for experiment bookkeeping; metadata records the actual COMSOL solve DoFs.
+Those prior directories were later renamed to actual-DoF names. `comso_full` is retained as the reference directory.
 
 ## Smoke Results
 
@@ -495,3 +495,83 @@ Interpretation:
 - Reference-selected residual smoothing can improve slightly over prior only, but that is not a production rule.
 - Leave-one-out selection is unstable on small 4x4 grids; it works for some spacing groups and fails for spacing 2.
 - This suggests a new paper direction may be possible, but it must be framed as prior-assisted correction/uncertainty quantification, not as pure random-walk multi-point fusion.
+
+## Coarser COMSOL Priors With Actual DoF Names
+
+Correction after review: the earlier `comso_1875`-style names are legacy/source or nominal labels, not necessarily actual COMSOL solution DoF. For new COMSOL priors, the directory naming rule is now:
+
+```text
+comso_<actual_solution_dof>
+```
+
+The actual solution DoF is parsed from `comsol_batch.log`. The original log-sweep target label and mesh parameters are kept in each `metadata.json` as `nominal_log_sweep_label` and `mesh`.
+
+The new log-spaced coarse sweep uses nominal target labels `16, 32, 64, 125, 250, 500, 1000`, but the stored directory names below are actual DoF.
+
+| Case | Prior dir | Nominal target | Runtime (s) | hmax | hmin | Max abs error (C) | Avg abs error (C) | RMSE (C) |
+|---|---|---:|---:|---|---|---:|---:|---:|
+| Case 1 | `comso_1288` | 16 | 11 | `20[mm]` | `5000[um]` | 3.7637 | 0.7396 | 1.0186 |
+| Case 1 | `comso_2856` | 32 | 12 | `16[mm]` | `4000[um]` | 3.8475 | 1.1422 | 1.3768 |
+| Case 1 | `comso_6253` | 64 | 13 | `12.5[mm]` | `2500[um]` | 3.3651 | 1.1968 | 1.3508 |
+| Case 1 | `comso_10254` | 125 | 14 | `10[mm]` | `1250[um]` | 1.2620 | 0.2279 | 0.3080 |
+| Case 1 | `comso_15273` | 250 | 14 | `7.8[mm]` | `1000[um]` | 0.8730 | 0.1333 | 0.1893 |
+| Case 1 | `comso_22369` | 500 | 15 | `6.2[mm]` | `800[um]` | 0.7761 | 0.2022 | 0.2304 |
+| Case 1 | `comso_39759` | 1000 | 15 | `4.9[mm]` | `600[um]` | 0.8339 | 0.2250 | 0.2581 |
+| Case 2 | `comso_1296` | 16 | 13 | `20[mm]` | `5000[um]` | 4.7951 | 1.4828 | 1.7635 |
+| Case 2 | `comso_2779` | 32 | 12 | `16[mm]` | `4000[um]` | 5.0352 | 0.9273 | 1.3163 |
+| Case 2 | `comso_6015` | 64 | 13 | `12.5[mm]` | `2500[um]` | 2.6559 | 0.7152 | 0.8686 |
+| Case 2 | `comso_10433` | 125 | 13 | `10[mm]` | `1250[um]` | 2.1681 | 0.5382 | 0.6629 |
+| Case 2 | `comso_18771` | 250 | 13 | `7.8[mm]` | `1000[um]` | 1.6672 | 0.5627 | 0.6399 |
+| Case 2 | `comso_25820` | 500 | 14 | `6.2[mm]` | `800[um]` | 0.9712 | 0.1942 | 0.2325 |
+| Case 2 | `comso_39341` | 1000 | 24 | `4.9[mm]` | `600[um]` | 1.5121 | 0.7483 | 0.7615 |
+| Case 3 | `comso_1305` | 16 | 13 | `20[mm]` | `5000[um]` | 1.3969 | 0.2272 | 0.3187 |
+| Case 3 | `comso_2841` | 32 | 12 | `16[mm]` | `4000[um]` | 0.9776 | 0.3222 | 0.3727 |
+| Case 3 | `comso_6144` | 64 | 13 | `12.5[mm]` | `2500[um]` | 0.8290 | 0.1394 | 0.1644 |
+| Case 3 | `comso_10316` | 125 | 19 | `10[mm]` | `1250[um]` | 0.5459 | 0.0829 | 0.1044 |
+| Case 3 | `comso_17035` | 250 | 14 | `7.8[mm]` | `1000[um]` | 0.3314 | 0.0877 | 0.0959 |
+| Case 3 | `comso_24196` | 500 | 14 | `6.2[mm]` | `800[um]` | 0.2440 | 0.0569 | 0.0661 |
+| Case 3 | `comso_39533` | 1000 | 14 | `4.9[mm]` | `600[um]` | 0.4045 | 0.0928 | 0.1108 |
+
+Interpretation:
+
+- The previous statement that `1875` was "too accurate" was partly a naming problem: those labels were not actual COMSOL DoF. The new actual-DoF priors show substantially rougher fields around `1k-6k` actual DoF.
+- Errors are not strictly monotone in DoF because the mesh parameter changes also affect element quality and how heat-source boundaries are sampled.
+- Use the actual-DoF directories above for any new prior-accuracy tradeoff plots. Treat older `comso_1875`, `comso_4800`, and similar imported directories as legacy/source-labeled data unless their metadata contains `actual_solution_dof`.
+
+## Legacy Prior Cleanup And Extreme Coarse Priors
+
+Cleanup decision:
+
+- Deleted prior directories whose `metadata.json` did not contain `actual_solution_dof`.
+- Renamed Case 2 legacy priors that did contain actual DoF from target labels to actual-DoF names:
+  - `comso_1875 -> comso_48666`
+  - `comso_4800 -> comso_144851`
+  - `comso_12500 -> comso_480945`
+  - `comso_86247 -> comso_2139473`
+  - `comso_32000 -> comso_2164400`
+- Kept `comso_full` reference directories as reference inputs, even where exact reference DoF is not in metadata.
+- Updated default FastRW configs to use actual-DoF priors:
+  - Case 1: `comso_10254`
+  - Case 2: `comso_10433`
+  - Case 3: `comso_10316`
+
+Extreme coarseness probe:
+
+- `hmax=100[mm], hmin=1000[mm]` reached a 161-DoF linear system on Case 1 but failed the Java/export stage, so it is not usable.
+- `hmax=100[mm], hmin=100[mm]` exported but produced more DoF than the `50[mm]` setting.
+- The coarsest usable setting found in this probe is `hmax=100[mm], hmin=50[mm], hgrad=50`.
+
+| Case | Prior dir | Mesh setting | Runtime (s) | Elements | Min quality | Max abs error (C) | Avg abs error (C) | RMSE (C) |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| Case 1 | `comso_392` | `hmax=100[mm], hmin=50[mm], hgrad=50` | 11 | 165 | 0.005744 | 23.8518 | 12.3856 | 13.5192 |
+| Case 1 | `comso_699` | `hmax=100[mm], hmin=20[mm], hgrad=20` | 12 | 346 | 0.007774 | 8.7119 | 2.7351 | 3.3835 |
+| Case 2 | `comso_471` | `hmax=100[mm], hmin=50[mm], hgrad=50` | 13 | 194 | 0.005744 | 25.7174 | 13.1463 | 14.4934 |
+| Case 2 | `comso_691` | `hmax=100[mm], hmin=20[mm], hgrad=50` | 12 | 340 | 0.007773 | 9.6103 | 2.8611 | 3.6303 |
+| Case 3 | `comso_435` | `hmax=100[mm], hmin=50[mm], hgrad=50` | 12 | 182 | 0.005744 | 4.9782 | 1.7671 | 2.1144 |
+| Case 3 | `comso_681` | `hmax=100[mm], hmin=20[mm], hgrad=50` | 12 | 335 | 0.007773 | 6.8019 | 2.5279 | 2.7562 |
+
+Interpretation:
+
+- The `~400-700` DoF priors are intentionally very rough and should be useful for showing the bad-prior end of the tradeoff curve.
+- These meshes have very low element quality; use them as prior-quality stress tests, not as trustworthy FEM solves.
+- From this point forward, prior-sweep scripts and tables should use actual-DoF directory names only.

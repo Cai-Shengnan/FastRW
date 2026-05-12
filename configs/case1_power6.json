@@ -35,7 +35,7 @@
   },
   "data": {
     "power_density_path": "../data/cases/case1_power6/power.bin",
-    "prior_temperature_path": "../data/cases/case1_power6/comsol/comso_12500/temp.bin",
+    "prior_temperature_path": "../data/cases/case1_power6/comsol/comso_10254/temp.bin",
     "reference_temperature_path": "../data/cases/case1_power6/comsol/comso_full/temp.bin",
     "temperature_offset": 0
   },

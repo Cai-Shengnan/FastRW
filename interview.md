@@ -134,3 +134,34 @@ User decision: accepted.
 Current implementation had mixed historical inputs: older archived `temp.bin` files were in Celsius with an added offset, while fresh COMSOL exports were in Kelvin.
 
 User decision: use Celsius uniformly. The cleaned `data/cases/**/temp.bin`, random-walk CSV outputs, reference errors, and prior tail correction fields should all use Celsius. The COMSOL helper may solve internally with Kelvin boundary temperatures, but exported temperature files must be converted back to Celsius.
+
+### Q12. How should COMSOL prior directories be named?
+
+Issue found during the new coarse-prior sweep: using names such as `comso_16`, `comso_125`, or legacy `comso_1875` can be misleading if the number is only a target/nominal label rather than the actual COMSOL solution DoF.
+
+User correction: when naming priors, record the real DoF and do not use arbitrary target names as if they were DoF.
+
+Decision: for newly generated COMSOL priors, use `comso_<actual_solution_dof>` as the directory name. Parse `actual_solution_dof` from `comsol_batch.log`, copy the exported Celsius field to `temp.bin`, and write `metadata.json` with:
+
+- `directory_name_policy: actual COMSOL solution DoF from comsol_batch.log`
+- `nominal_log_sweep_label`
+- mesh parameters
+- runtime and element-quality metadata
+- prior error versus the full reference
+
+Legacy imported directories whose metadata lacks actual COMSOL DoF should be treated as source-labeled legacy data, not as actual-DoF priors.
+
+### Q13. What happens to old prior directories without actual DoF?
+
+User correction: old prior directories should not remain if their number is not actual DoF. If no DoF is recorded, delete them and rerun an approximately comparable prior with actual-DoF naming.
+
+Decision and implementation:
+
+- Deleted legacy prior directories without `actual_solution_dof` metadata.
+- Renamed Case 2 legacy priors that had actual DoF into actual-DoF names.
+- Kept `comso_full` references as special reference directories.
+- Added extreme coarse priors around `400-700` actual DoF where COMSOL could still export usable Celsius temperature fields.
+- Updated default FastRW configs to actual-DoF prior names:
+  - Case 1: `comso_10254`
+  - Case 2: `comso_10433`
+  - Case 3: `comso_10316`

@@ -28,7 +28,7 @@ Temperature inputs are split by role:
 ```json
 "data": {
   "power_density_path": "../data/cases/<case>/power.bin",
-  "prior_temperature_path": "../data/cases/<case>/comsol/comso_12500/temp.bin",
+  "prior_temperature_path": "../data/cases/<case>/comsol/comso_<actual_dof>/temp.bin",
   "reference_temperature_path": "../data/cases/<case>/comsol/comso_full/temp.bin",
   "temperature_offset": 0
 }
@@ -84,14 +84,20 @@ COMSOL inputs and generated temperature fields live under:
 data/cases/<case>/comsol/comso_<dof>/
 ```
 
+For generated priors, `<dof>` is the actual COMSOL solution DoF parsed from
+`comsol_batch.log`, not a target mesh label. If the DoF is not known yet, write
+to a temporary `_pending_*` directory and rename after the solve.
+
 The COMSOL helper is case-config driven:
 
 ```bash
 ./scripts/run_comsol_case3_rebuild.sh \
   --config configs/case2_4core_top1_bottom1.json \
-  --output-dir data/cases/case2_4core_top1_bottom1/comsol/comso_12500 \
-  --mesh-label comso_12500 \
+  --output-dir data/cases/case2_4core_top1_bottom1/comsol/_pending_prior \
+  --mesh-label pending_prior \
   --hmax '2[mm]' --hmin '200[um]' --hgrad 1.5
 ```
 
-The helper exports `temp.bin` and temperature CSV files in Celsius.
+The helper exports `heat_layer_cell_center_temperatures.bin` and temperature CSV
+files in Celsius. Finalized prior directories also contain a compatibility
+`temp.bin` copy and `metadata.json`.
