@@ -2,6 +2,7 @@ build/
 build-metal/
 outputs/
 data/
+scripts/
 .vscode/
 .DS_Store
 
