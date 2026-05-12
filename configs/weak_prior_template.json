@@ -1,7 +1,0 @@
-{
-  "note": "Generate a uniform average-temperature prior temp.bin per case, then copy the corresponding FastRW config and set data.prior_temperature_path to that file.",
-  "cutoff_weight": 0.001,
-  "strip_ratio": 1.56,
-  "delta_x": 5e-7,
-  "seed": 42
-}

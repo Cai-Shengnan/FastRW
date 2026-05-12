@@ -3,6 +3,7 @@ build-metal/
 outputs/
 data/
 scripts/
+configs/
 .vscode/
 .DS_Store
 
@@ -10,9 +11,6 @@ scripts/
 *.csv
 *.json
 *.npy
-
-!configs/
-!configs/*.json
 
 data/**/*.npz
 data/**/*.zip
