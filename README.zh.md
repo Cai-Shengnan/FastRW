@@ -5,7 +5,11 @@
 基于 Apple Metal + C++17 的 GPU 随机游走热模拟求解器，包含 **FastRW /
 FasterRW** 算法的复现实验框架。
 
-[![bootstrap case 1](docs/figures/bootstrap_case1.png)](docs/figures/bootstrap_case1.png)
+<p>
+  <img src="docs/figures/bootstrap_case1.png" width="32%">
+  <img src="docs/figures/bootstrap_case2.png" width="32%">
+  <img src="docs/figures/bootstrap_case3.png" width="32%">
+</p>
 
 `FastRW`（算法 1 + 2）结合 FEM 先验与残差随机游走，通过路径尾段复用做
 逆方差融合。`FasterRW`（算法 1 + 2 + 3）在此基础上加入先验误差坐标下的
@@ -21,9 +25,8 @@ FasterRW** 算法的复现实验框架。
 - [复现流程](#复现流程)
 - [分阶段手动调用](#分阶段手动调用)
 - [配置说明](#配置说明)
-- [算法概览](#算法概览)
+- [重新生成 COMSOL 先验](#重新生成-comsol-先验)
 - [硬件与平台说明](#硬件与平台说明)
-- [引用](#引用)
 - [许可证](#许可证)
 
 ---
@@ -36,31 +39,24 @@ artifacts 时**约 1 分钟**；如从头跑 Phase 1 约 **12 分钟**。
 
 ```bash
 # 1. 克隆仓库 + 创建 conda 环境（环境名: fastrw）
-git clone https://github.com/<your-org>/ResRW.git
+git clone https://github.com/ShiningSord/ResRW.git
 cd ResRW
 conda env create -f environment.yml
 conda activate fastrw
 
-# 2. 下载 artifact 压缩包（193 MB 解压后，58 MB 压缩包）
-#    Google Drive 链接（上传后请替换）：
-#
-#        https://drive.google.com/<TODO_REPLACE_WITH_REAL_LINK>
-#
-#    保存为仓库根目录下的 ./resrw-artifacts-v1.zip
-
-# 3. 原地解压（自动填充 data/ 与 outputs/tcad_table1/）
-./scripts/fetch_artifacts.sh
-
-# 4. 一键复现
+# 2. 一键复现（首次运行会自动解压 repo 中的 artifact zip）
 ./reproduce.sh
 ```
 
 复现完成后在浏览器中打开 `outputs/report.html` —— 这是一个自包含的
 HTML 文件，所有表格已渲染、所有 bootstrap 图已 base64 内嵌。
 
-> Artifact 压缩包**未**保存在 git 中（体积太大）。如果不下载，
-> `./reproduce.sh` 会自动回退到 Phase 1（Metal MC，M 系列约 10 分钟），
-> 从零生成同样的产物。
+如果你想手动解压 artifact zip（例如在跑任何东西之前查看
+`data/` / `outputs/` 内容）：
+
+```bash
+./scripts/fetch_artifacts.sh
+```
 
 ---
 
@@ -68,8 +64,10 @@ HTML 文件，所有表格已渲染、所有 bootstrap 图已 base64 内嵌。
 
 ```
 ResRW/
-├── README.md, README.zh.md, LICENSE, CMakeLists.txt, environment.yml, .gitignore
+├── README.md, README.zh.md, LICENSE, CMakeLists.txt, environment.yml
 ├── reproduce.sh                  一键 Phase 1 -> 2 -> 3 -> 4 驱动脚本
+├── comsol.sh                     一键重新生成 COMSOL 先验（需要 COMSOL）
+├── resrw-artifacts-v1.zip        预计算先验 + Phase-1 MC（58 MB）
 │
 ├── src/                          C++17 随机游走核心
 │   ├── main.cpp, main_metal.cpp  CPU 与 Metal 入口
@@ -95,6 +93,8 @@ ResRW/
 │   ├── build_table1_bootstrap.js    Phase 3: 从 sweep 生成 Markdown Table 1
 │   ├── build_html_report.py         Phase 4: 自包含的 outputs/report.html
 │   ├── fetch_artifacts.sh           原地解压 artifact 压缩包
+│   ├── run_comsol_case3_rebuild.sh  单次 (case, mesh) 的 COMSOL 求解器
+│   ├── comsol_case3_rebuild.java    上面脚本使用的 COMSOL Java 模型
 │   └── _lib.js                      共享 JS 工具函数
 │
 ├── configs/
@@ -105,33 +105,28 @@ ResRW/
 │   └── tcad_table_weakprior/        tab:weakprior 弱先验配置
 │
 ├── docs/figures/                    入库的 Fig. bootstrap PNG
-├── data/                            gitignored；由 fetch_artifacts.sh 填充
-├── outputs/                         gitignored；由 fetch_artifacts.sh + reproduce.sh 填充
-└── legacy/                          不再维护；诊断脚本 + COMSOL 重建工具
+├── data/                            由 reproduce.sh 从 artifact zip 解压填充
+└── outputs/                         由 reproduce.sh 填充
 ```
-
-实验种子全程固定为 **42**。所有现行配置均使用
-`walker.delta_x = 5e-7`、`boundary.rho = 1.56`，因此
-`boundary.epsilon.{neumann,robin} = 7.8e-7`。
 
 ---
 
 ## 复现流程
 
 ```
-                     fetch_artifacts.sh
+                     reproduce.sh
+                            |
+                  (首次运行自动解压 resrw-artifacts-v1.zip)
                             |
                             v
             +---------------+---------------+
             |   data/cases/case{1,2,3}/      |
-            |   outputs/tcad_table1/...      |  (随包发布)
+            |   outputs/tcad_table1/...      |
             +---------------+---------------+
                             |
                             v
-             reproduce.sh   (检测到 MC 已就绪则自动跳过 Phase 1)
-                            |
         ===================== Phase 1 =====================
-                            |  (如已就绪则跳过)
+                            |  (如已就绪则自动跳过)
             run_pirw_direct.sh    --> outputs/tcad_table1/pirw_case{1,2,3}/
             run_fastrw_direct.sh  --> outputs/tcad_table1/fastrw_case{1,2,3}/
                             |
@@ -231,8 +226,6 @@ open outputs/report.html
   PIRW 配置中 `walker.use_tail_correction: false`，会忽略该字段。
 - `reference_temperature_path`：仅用于报告误差的金标准
   （在 `direct.csv` 中作为 `GT_Temperature` 列）。
-- `walker.delta_x`、`boundary.rho`、`boundary.epsilon.*` 在论文中已锁定，
-  复现时不要修改。
 
 `run.seed = 42` 全局一致。给定相同 seed、相同 threadgroup 数、相同二进制，
 Metal kernel 输出可复现。
@@ -245,39 +238,29 @@ Metal kernel 输出可复现。
 
 ---
 
-## 算法概览
+## 重新生成 COMSOL 先验
 
-Robin 边界热传导 PDE 用三层几何（底/热源/顶）中的 Itô 扩散求解，终止条件
-包括：
-- 顶/底 Robin 反射（参数 `h`）；
-- 侧壁 Neumann 反射；
-- 热源面 Dirichlet 吸收（通过尾段修正实现）。
+Artifact 压缩包中已包含复现流程消费的所有 COMSOL 先验，**无需 COMSOL
+授权**就能复现论文。如果你装有 COMSOL Multiphysics 6.2 并希望从零
+重建 FEM 先验温度场，运行：
 
-#### PIRW（基线）
+```bash
+./comsol.sh                 # 重建所有 (case, dof) 先验（含已保存 mesh 参数的）
+./comsol.sh --cases=1       # 仅 case 1
+./comsol.sh --dry-run       # 打印要调用的 COMSOL 命令但不执行
+COMSOL_BIN=/path/to/comsol ./comsol.sh
+```
 
-对每个查询点，独立采样 `N` 条随机游走；每条游走的 Robin 终值贡献 +
-热源沿路径的局部时间积分构成一次无偏温度估计。直接取算术平均作为
-结果。
+`comsol.sh` 遍历每个 `data/cases/case{1,2,3}/comsol/comso_<dof>/` 目录，
+从其 `metadata.json` 读取 mesh 参数，通过
+`scripts/run_comsol_case3_rebuild.sh` 重新求解。每次求解结束后，
+COMSOL 输出的 `heat_layer_cell_center_temperatures.bin` 会被复制为
+`temp.bin`。`comso_full/` 会被跳过 —— 它是外部提供的金标准温度场，
+不由本流程生成。
 
-#### FastRW = 算法 1 + 2（本仓库）
-
-- **算法 1（路径尾段截断, Λ）：** 当一条游走的剩余权重低于 `Λ` 时，
-  截断尾段并直接使用截断点处的先验温度。引入的偏差不超过
-  `Λ · max_prior_error`。
-- **算法 2（无自融合的逆方差融合）：** 每条游走的完整观测和它的
-  截断-先验复用观测视为两个相关测量值；用同一查询点上其它游走的
-  leave-one-out 协方差进行融合。对应
-  `bootstrap_sweep_fastrw.json::fastrw_avg_abs_*` 系列。
-
-#### FasterRW = 算法 1 + 2 + 3
-
-- **算法 3（通用克里金 GP 残差）：** 对每个查询点，将 FastRW 残差
-  （FastRW 估计 − 先验）对 M-1 个其它查询点的残差做通用克里金回归
-  （Matern-3/2 核，幅值用 `amp_factor` 放大）。克里金预测替换原始
-  FastRW 值。对应 `fasterrw_avg_abs_*` 系列。
-
-数学推导见论文；各脚本的头部注释（例如
-`scripts/run_bootstrap_sweep.sh`）说明了所用度量的具体定义。
+默认 COMSOL CLI 路径为
+`/Applications/COMSOL62/Multiphysics/bin/comsol`；可用 `COMSOL_BIN`
+环境变量覆盖。
 
 ---
 
@@ -293,9 +276,9 @@ Robin 边界热传导 PDE 用三层几何（底/热源/顶）中的 Itô 扩散�
   `npm install`。
 - **Python：** 仅依赖 `numpy` 与 `matplotlib`（已写入
   `environment.yml`）。
-- **COMSOL：** 开源流程**无需 COMSOL 授权**。artifact 压缩包中已包含
-  流程消费的所有先验温度场。重建 COMSOL 先验的脚本
-  （`legacy/scripts/run_comsol_*.sh`）保留在 `legacy/` 仅供查阅。
+- **COMSOL：** 复现流程**无需 COMSOL 授权**。artifact 压缩包中已包含
+  流程消费的所有先验温度场。如需从零重建见
+  [重新生成 COMSOL 先验](#重新生成-comsol-先验)。
 
 ### Bit-level 可复现性注意事项
 
@@ -306,46 +289,6 @@ Robin 边界热传导 PDE 用三层几何（底/热源/顶）中的 Itô 扩散�
 
 ---
 
-## Artifact 压缩包内容
-
-`resrw-artifacts-v1.zip`（约 58 MB 压缩、193 MB 解压、共 236 个文件）
-包含：
-
-| 路径 | 用途 |
-| ---- | ---- |
-| `data/cases/case{1,2,3}/power.bin` | 功率密度输入。 |
-| `data/cases/case{1,2,3}/metadata.json` | case 元数据。 |
-| `data/cases/case{1,2,3}/comsol/comso_*/temp.bin` | FEM 先验温度（摄氏度）。 |
-| `data/cases/case{1,2,3}/comsol/comso_*/metadata.json` | DoF、COMSOL 求解时间。 |
-| `data/cases/case1_power6/comsol/comso_{699,1288,10254}/timing_warm.json` | FEM 热网格计时（用于 tab:tradeoff / tab:time）。 |
-| `data/cases/case1_power6/rule_of_thumb/` | tab:weakprior 用的均匀先验。 |
-| `outputs/tcad_table1/{fastrw,pirw}_case{1,2,3}/direct.csv,constraints.json,...` | Phase-1 长 MC 产物（PIRW N_max = 4096，FastRW N_max = 8192）。 |
-| `outputs/tcad_table_tradeoff/dof{699,1288,10254}/` | tab:tradeoff 的 Phase-3 MC。 |
-| `outputs/tcad_table_weakprior/fastrw_case1_rot/` | tab:weakprior 的 Phase-3 MC（Λ=1e-3 弱先验）。 |
-
-**不**入包：COMSOL `.mph` 工程文件、`temp.bin` 的 CSV 副本、COMSOL
-workspace 配置、以及 case 4 / 5 数据（开源复现流程未使用）。
-
----
-
-## 引用
-
-如使用本代码或 FastRW / FasterRW 算法，请引用：
-
-```bibtex
-@article{wang_fastrw_2026,
-  title   = {FastRW: ...},
-  author  = {Wang, Zixiao and ...},
-  journal = {IEEE Transactions on Computer-Aided Design},
-  year    = {2026},
-  note    = {To appear}
-}
-```
-
-（待补：发表期刊详情、DOI、precalculation-PIRW 引用。）
-
----
-
 ## 许可证
 
-MIT — 详见 [LICENSE](LICENSE)。
+MIT —— 详见 [LICENSE](LICENSE)。

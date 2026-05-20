@@ -150,10 +150,12 @@ def build_table1() -> str:
 # Bootstrap figures (Case 1/2/3)
 # ---------------------------------------------------------------------------
 def build_bootstrap_figs() -> str:
-    parts = ['<h2>Fig. bootstrap &mdash; |err| vs N (B=500 bootstrap subsamples)</h2>']
+    parts = ['<h2>Fig. bootstrap &mdash; |err| vs N (B=500 bootstrap subsamples)</h2>',
+             '<div class="fig-row">']
     for case_id, label in CASES:
         png = OUT / "tcad_table1" / f"bootstrap_case{case_id}.png"
-        parts.append(f'<figure><figcaption>{html.escape(label)}</figcaption>{embed_png(png)}</figure>')
+        parts.append(f'<figure>{embed_png(png)}<figcaption>{html.escape(label)}</figcaption></figure>')
+    parts.append('</div>')
     return "".join(parts)
 
 
@@ -334,9 +336,11 @@ th { background: #eef2f8; }
 .eps-header th { background: #d8e3f3; text-align: center; }
 tr:nth-child(even) td { background: #fafafa; }
 .note { color: #555; font-size: 0.9em; }
-figure { margin: 1em 0; }
-figure img { max-width: 100%; height: auto; border: 1px solid #ddd; }
-figcaption { font-style: italic; color: #555; margin-bottom: 0.3em; }
+.fig-row { display: flex; gap: 0.6em; flex-wrap: wrap; margin: 1em 0; }
+.fig-row figure { flex: 1 1 30%; min-width: 200px; margin: 0; }
+.fig-row figure img { width: 100%; height: auto; border: 1px solid #ddd; }
+figcaption { font-style: italic; color: #555; margin-bottom: 0.3em;
+             font-size: 0.85em; text-align: center; }
 header { background: #f4f6fb; padding: 0.8em 1em; border-radius: 4px;
          font-size: 0.85em; color: #444; margin-bottom: 1em; }
 code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; }

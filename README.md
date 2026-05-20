@@ -3,7 +3,13 @@
 GPU random-walk thermal solver and experiment harness for the
 **FastRW / FasterRW** algorithms (Apple Metal + C++17).
 
-[![bootstrap case 1](docs/figures/bootstrap_case1.png)](docs/figures/bootstrap_case1.png)
+[中文 README](README.zh.md)
+
+<p>
+  <img src="docs/figures/bootstrap_case1.png" width="32%">
+  <img src="docs/figures/bootstrap_case2.png" width="32%">
+  <img src="docs/figures/bootstrap_case3.png" width="32%">
+</p>
 
 `FastRW` (Alg. 1 + 2) couples an FEM prior with a residual random walk
 that reuses correlated path tails for inverse-variance fusion. `FasterRW`
@@ -21,9 +27,8 @@ a single one-key driver.
 - [Reproduction flow](#reproduction-flow)
 - [Manual per-phase invocation](#manual-per-phase-invocation)
 - [Configuration](#configuration)
-- [Algorithm summary](#algorithm-summary)
+- [Re-generating COMSOL priors](#re-generating-comsol-priors)
 - [Hardware and platform notes](#hardware-and-platform-notes)
-- [Citation](#citation)
 - [License](#license)
 
 ---
@@ -37,32 +42,24 @@ if you re-run Phase 1 from scratch.
 
 ```bash
 # 1. Clone and set up the conda env (env name: fastrw)
-git clone https://github.com/<your-org>/ResRW.git
+git clone https://github.com/ShiningSord/ResRW.git
 cd ResRW
 conda env create -f environment.yml
 conda activate fastrw
 
-# 2. Download the artifact archive (193 MB uncompressed, 58 MB zip).
-#    Public Google Drive link (replace with the upload URL):
-#
-#        https://drive.google.com/<TODO_REPLACE_WITH_REAL_LINK>
-#
-#    Save it as ./resrw-artifacts-v1.zip at the repo root.
-
-# 3. Extract it in place (data/ and outputs/tcad_table1/ are populated)
-./scripts/fetch_artifacts.sh
-
-# 4. Reproduce everything
+# 2. One-key reproduction (auto-extracts the in-repo artifact zip on first run)
 ./reproduce.sh
 ```
 
 Open `outputs/report.html` in any browser — it is a single self-contained
 HTML file with every table rendered and every bootstrap figure embedded.
 
-> The artifact archive is **not** stored in git (it is too large). If you
-> do not download it, `./reproduce.sh` will fall through to Phase 1
-> (Metal MC, ~10 min on an M-series GPU) and produce the same outputs
-> from scratch.
+If you want to extract the artifact zip manually (e.g. inspect the
+`data/` and `outputs/` payload before running anything):
+
+```bash
+./scripts/fetch_artifacts.sh
+```
 
 ---
 
@@ -70,8 +67,10 @@ HTML file with every table rendered and every bootstrap figure embedded.
 
 ```
 ResRW/
-├── README.md, LICENSE, CMakeLists.txt, environment.yml, .gitignore
+├── README.md, README.zh.md, LICENSE, CMakeLists.txt, environment.yml
 ├── reproduce.sh                  one-key Phase 1 -> 2 -> 3 -> 4 driver
+├── comsol.sh                     one-key COMSOL prior re-generation (needs COMSOL)
+├── resrw-artifacts-v1.zip        precomputed priors + Phase-1 MC (58 MB)
 │
 ├── src/                          C++17 random-walk core
 │   ├── main.cpp, main_metal.cpp  CPU and Metal entrypoints
@@ -97,6 +96,8 @@ ResRW/
 │   ├── build_table1_bootstrap.js    Phase 3: markdown Table 1 from sweep
 │   ├── build_html_report.py         Phase 4: self-contained outputs/report.html
 │   ├── fetch_artifacts.sh           extract artifact zip in place
+│   ├── run_comsol_case3_rebuild.sh  invoke COMSOL solve for one (case, mesh)
+│   ├── comsol_case3_rebuild.java    COMSOL Java model used by the above
 │   └── _lib.js                      shared JS helpers
 │
 ├── configs/
@@ -107,33 +108,28 @@ ResRW/
 │   └── tcad_table_weakprior/        rule-of-thumb prior for tab:weakprior
 │
 ├── docs/figures/                    committed PNGs of Fig. bootstrap
-├── data/                            gitignored; populated by fetch_artifacts.sh
-├── outputs/                         gitignored; populated by fetch_artifacts.sh + reproduce.sh
-└── legacy/                          unmaintained; diagnostics + COMSOL-rebuild
+├── data/                            populated by reproduce.sh from the artifact zip
+└── outputs/                         populated by reproduce.sh
 ```
-
-The fixed experiment seed is **42** throughout. All current configs use
-`walker.delta_x = 5e-7`, `boundary.rho = 1.56`, and therefore
-`boundary.epsilon.{neumann,robin} = 7.8e-7`.
 
 ---
 
 ## Reproduction flow
 
 ```
-                     fetch_artifacts.sh
+                     reproduce.sh
+                            |
+                  (auto-extracts resrw-artifacts-v1.zip on first run)
                             |
                             v
             +---------------+---------------+
             |   data/cases/case{1,2,3}/      |
-            |   outputs/tcad_table1/...      |  (shipped)
+            |   outputs/tcad_table1/...      |
             +---------------+---------------+
                             |
                             v
-             reproduce.sh   (auto-skips Phase 1 if MC outputs present)
-                            |
         ===================== Phase 1 =====================
-                            |  (skipped when shipped artifacts present)
+                            |  (auto-skipped if shipped MC outputs present)
             run_pirw_direct.sh    --> outputs/tcad_table1/pirw_case{1,2,3}/
             run_fastrw_direct.sh  --> outputs/tcad_table1/fastrw_case{1,2,3}/
                             |
@@ -237,8 +233,6 @@ are split by role:
   `walker.use_tail_correction: false` and ignore the prior.
 - `reference_temperature_path` is the ground-truth field used **only**
   for metric reporting (`GT_Temperature` in `direct.csv`).
-- `walker.delta_x`, `boundary.rho`, `boundary.epsilon.*` are locked
-  across the paper and should not be modified for reproduction.
 
 `run.seed = 42` everywhere. The Metal kernel is deterministic given
 the same seed, threadgroup count, and binary.
@@ -252,42 +246,30 @@ applied after the walk.
 
 ---
 
-## Algorithm summary
+## Re-generating COMSOL priors
 
-The Robin-boundary thermal PDE is solved by an Itô diffusion in a
-three-layer geometry (bottom / heat-source / top), terminated by:
-- **Robin reflection** at top and bottom slabs (parameter `h`),
-- **Neumann reflection** at lateral walls,
-- **Dirichlet absorption** at the source plane (via tail correction).
+The artifact zip ships every COMSOL prior the reproduction flow needs,
+so a COMSOL license is **not** required to reproduce the paper. If you
+do have COMSOL Multiphysics 6.2 installed and want to regenerate the
+FEM-prior temperature fields from scratch, run:
 
-#### PIRW (baseline)
+```bash
+./comsol.sh                 # rebuild every (case, dof) we have mesh params for
+./comsol.sh --cases=1       # restrict to case 1
+./comsol.sh --dry-run       # print planned COMSOL invocations and exit
+COMSOL_BIN=/path/to/comsol ./comsol.sh
+```
 
-For each query, draw `N` random walks; each walk's terminal Robin
-contribution plus the local-time integral of the power source gives an
-unbiased temperature estimate. The plain Monte-Carlo average is
-reported.
+`comsol.sh` iterates over each shipped `data/cases/case{1,2,3}/comsol/comso_<dof>/`
+directory, reads the mesh parameters from its `metadata.json`, and replays
+them via `scripts/run_comsol_case3_rebuild.sh`. After each solve the
+COMSOL output `heat_layer_cell_center_temperatures.bin` is aliased back
+to `temp.bin`. `comso_full/` is skipped — it is an externally-supplied
+ground-truth field, not produced by this pipeline.
 
-#### FastRW = Alg. 1 + 2 (this repo)
-
-- **Alg. 1 (path-tail truncation, Λ):** every walk truncates its tail
-  once its remaining-weight falls below `Λ` and reuses the prior at the
-  truncation point. The bias introduced is `≤ Λ · max_prior_error`.
-- **Alg. 2 (inverse-variance fusion, no-self):** each walk's full
-  observation plus its truncated-prior reuse become two correlated
-  measurements; we combine them with the leave-one-out covariance from
-  the other walks at the same query. This is the
-  `bootstrap_sweep_fastrw.json::fastrw_avg_abs_*` series.
-
-#### FasterRW = Alg. 1 + 2 + 3
-
-- **Alg. 3 (universal-kriging GP residual):** at each query, regress
-  the FastRW residual (FastRW estimate − prior) against the M-1 other
-  queries' residuals with a universal-kriging GP (Matern-3/2 kernel,
-  amplitude inflated by `amp_factor`). The kriged prediction replaces
-  the raw FastRW value. This is the `fasterrw_avg_abs_*` series.
-
-See the paper for derivations; per-script headers (e.g.
-`scripts/run_bootstrap_sweep.sh`) document the metric definitions.
+The default COMSOL CLI path is
+`/Applications/COMSOL62/Multiphysics/bin/comsol`; override with
+`COMSOL_BIN`.
 
 ---
 
@@ -304,11 +286,10 @@ See the paper for derivations; per-script headers (e.g.
   There is **no** `npm install` step.
 - **Python:** only `numpy` and `matplotlib` are required (in
   `environment.yml`).
-- **COMSOL:** the open-source flow **does not require a COMSOL
+- **COMSOL:** the reproduction flow **does not require a COMSOL
   license**. The artifact archive ships every prior temperature field
-  the pipeline consumes. Scripts that re-generate COMSOL priors
-  (`legacy/scripts/run_comsol_*.sh`) are retained in `legacy/` for
-  transparency.
+  the pipeline consumes. See [Re-generating COMSOL priors](#re-generating-comsol-priors)
+  if you want to rebuild them.
 
 ### Bit-level reproducibility caveats
 
@@ -316,48 +297,6 @@ See the paper for derivations; per-script headers (e.g.
   cross-GPU outputs may differ by a few ULPs.
 - Post-processing is fully deterministic (pure Node, no FP atomics).
 - Bootstrap seeds derive deterministically from `(seed_base, B, trial)`.
-
----
-
-## Artifact archive contents
-
-`resrw-artifacts-v1.zip` (≈ 58 MB compressed, 193 MB extracted, 236
-files) contains:
-
-| Path | Purpose |
-| ---- | ------- |
-| `data/cases/case{1,2,3}/power.bin` | Power-density input. |
-| `data/cases/case{1,2,3}/metadata.json` | Case metadata. |
-| `data/cases/case{1,2,3}/comsol/comso_*/temp.bin` | FEM prior temperature (Celsius). |
-| `data/cases/case{1,2,3}/comsol/comso_*/metadata.json` | DoF, COMSOL solve runtime. |
-| `data/cases/case1_power6/comsol/comso_{699,1288,10254}/timing_warm.json` | FEM warm-mesh wallclock (for tab:tradeoff / tab:time). |
-| `data/cases/case1_power6/rule_of_thumb/` | Uniform prior used by tab:weakprior. |
-| `outputs/tcad_table1/{fastrw,pirw}_case{1,2,3}/direct.csv,constraints.json,...` | Phase-1 long-MC outputs (N_max = 4096 PIRW, 8192 FastRW). |
-| `outputs/tcad_table_tradeoff/dof{699,1288,10254}/` | Phase-3 MC for tab:tradeoff. |
-| `outputs/tcad_table_weakprior/fastrw_case1_rot/` | Phase-3 MC for tab:weakprior (Λ=1e-3 weak prior). |
-
-Items intentionally **not** shipped: COMSOL `.mph` project files, raw
-CSV duplicates of `temp.bin`, COMSOL workspace prefs, and case 4 / 5
-data which the public reproduction flow does not touch.
-
----
-
-## Citation
-
-If you use this code or the FastRW / FasterRW algorithms, please cite:
-
-```bibtex
-@article{wang_fastrw_2026,
-  title   = {FastRW: ...},
-  author  = {Wang, Zixiao and ...},
-  journal = {IEEE Transactions on Computer-Aided Design},
-  year    = {2026},
-  note    = {To appear}
-}
-```
-
-(Fill in venue, DOI, and the precalculation-PIRW reference once
-finalized.)
 
 ---
 

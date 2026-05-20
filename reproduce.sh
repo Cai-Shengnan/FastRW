@@ -47,6 +47,13 @@ done
 
 IFS=',' read -ra CASE_LIST <<< "${CASES}"
 
+# ----- Auto-extract artifact zip on first run -------------------------
+if [[ ! -d "${ROOT_DIR}/data/cases/case1_power6" ]] \
+   && [[ -f "${ROOT_DIR}/resrw-artifacts-v1.zip" ]]; then
+  echo "[reproduce] data/ is empty; extracting resrw-artifacts-v1.zip..."
+  "${ROOT_DIR}/scripts/fetch_artifacts.sh"
+fi
+
 mc_outputs_exist() {
   local case_id="$1"
   [[ -f "${ROOT_DIR}/outputs/tcad_table1/fastrw_case${case_id}/direct.csv" ]] && \

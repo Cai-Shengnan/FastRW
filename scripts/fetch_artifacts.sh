@@ -2,19 +2,9 @@
 # =====================================================================
 # fetch_artifacts.sh
 #
-# Extract resrw-artifacts-v1.zip into the repo so the OSS reproduction
-# flow has all the COMSOL priors and pre-computed Phase-1 long-MC
-# outputs it needs.
-#
-# Download the zip from the Google Drive link in the top-level README
-# (or your local copy), place it next to this repo root, and run:
-#
-#   ./scripts/fetch_artifacts.sh
-#
-# The zip unpacks at the repo root, populating:
-#   data/cases/case{1,2,3}/...              (COMSOL priors + power maps)
-#   outputs/tcad_table1/{fastrw,pirw}_case{1,2,3}/   (Phase-1 MC results)
-#   outputs/tcad_table_{tradeoff,weakprior}/...      (Phase-3 MC results)
+# Extract resrw-artifacts-v1.zip (committed in the repo root) into
+# data/ and outputs/, so the reproduction flow has the COMSOL priors
+# and pre-computed Phase-1 long-MC outputs it needs.
 #
 # Usage:
 #   ./scripts/fetch_artifacts.sh                       # use ./resrw-artifacts-v1.zip
@@ -26,15 +16,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZIP_PATH="${1:-${ROOT_DIR}/resrw-artifacts-v1.zip}"
 
 if [[ ! -f "${ZIP_PATH}" ]]; then
-  cat >&2 <<EOF
-[fetch_artifacts] ERROR: archive not found at:
-  ${ZIP_PATH}
-
-Download the archive from the Google Drive link in README.md and either
-place it at the path above, or pass its location as an argument:
-
-  ./scripts/fetch_artifacts.sh /path/to/resrw-artifacts-v1.zip
-EOF
+  echo "[fetch_artifacts] ERROR: archive not found at: ${ZIP_PATH}" >&2
   exit 1
 fi
 
@@ -47,7 +29,6 @@ echo "[fetch_artifacts] Extracting ${ZIP_PATH} into ${ROOT_DIR}"
 cd "${ROOT_DIR}"
 unzip -o -q "${ZIP_PATH}"
 
-# Sanity-check the expected payload landed where it should.
 missing=0
 for case_id in 1 2 3; do
   case_name=""

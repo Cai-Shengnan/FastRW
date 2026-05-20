@@ -6,8 +6,8 @@ build-metal/
 data/
 outputs/
 
-# Artifact archive (downloaded by user, extracted by fetch_artifacts.sh)
-resrw-artifacts-*.zip
+# Local-only working tree: not part of the open-source release
+legacy/
 
 # Editor / OS
 .DS_Store
