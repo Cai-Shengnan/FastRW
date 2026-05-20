@@ -43,6 +43,9 @@ struct PassSample {
 struct MultiPointStats {
     int normal_count;    // number of direct path samples
     double normal_mean; // mean temperature from direct samples
+    double sample_variance; // unbiased variance of direct path samples
+    double mean_variance; // estimated variance of the direct mean
+    double std_error; // estimated standard error of the direct mean
     double avg_steps;     // average number of steps per path (new)
 };
 

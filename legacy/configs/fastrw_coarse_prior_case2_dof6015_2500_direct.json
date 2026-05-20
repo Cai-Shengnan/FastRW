@@ -1,0 +1,78 @@
+{
+  "case_name": "case2_4core_top1_bottom1_dof6015_n2500_direct",
+  "power_map": "4-core",
+  "geometry": {
+    "xy_resolution": 0.0002,
+    "z_resolution": 0.00002,
+    "ambient_temperature": 20,
+    "source_conductivity": 125,
+    "medium_conductivity": 395,
+    "x_size": 0.02,
+    "y_size": 0.02,
+    "bottom_thickness": 0.001,
+    "middle_thickness": 0.0001,
+    "top_thickness": 0.001
+  },
+  "boundary": {
+    "top": {
+      "type": "Robin",
+      "param": 8700
+    },
+    "bottom": {
+      "type": "Robin",
+      "param": 8700
+    },
+    "lateral": {
+      "type": "Neumann",
+      "param": 0
+    },
+    "rho": 1.56,
+    "epsilon": {
+      "dirichlet": 1e-8,
+      "neumann": 7.8e-7,
+      "robin": 7.8e-7
+    }
+  },
+  "data": {
+    "power_density_path": "../data/cases/case2_4core_top1_bottom1/power.bin",
+    "prior_temperature_path": "../data/cases/case2_4core_top1_bottom1/comsol/comso_6015/temp.bin",
+    "reference_temperature_path": "../data/cases/case2_4core_top1_bottom1/comsol/comso_full/temp.bin",
+    "temperature_offset": 0
+  },
+  "walker": {
+    "max_steps": 50000000,
+    "cutoff_weight": 0.03,
+    "delta_x": 5e-7,
+    "use_tail_correction": true,
+    "tail_mode": "gt",
+    "robin_local_time_mode": "current",
+    "diagnostics": {
+      "enabled": false
+    }
+  },
+  "query_grid": {
+    "x_indices": [
+      15,
+      25,
+      35,
+      45
+    ],
+    "y_indices": [
+      15,
+      25,
+      35,
+      45
+    ]
+  },
+  "run": {
+    "num_samples": 2500,
+    "num_workers": -1,
+    "seed": 42
+  },
+  "output": {
+    "directory": "../outputs/fastrw_case2_dof6015_n2500",
+    "csv": "direct.csv",
+    "constraints": "constraints.json",
+    "diagnostics": "diagnostics.json"
+  }
+}

@@ -390,8 +390,19 @@ std::vector<MultiPointStats> RandomWalker::simulate_temperature_multi(
             count++;
         }
         double normal_mean = (count > 0) ? (sum / count) : 0.0;
+        double sample_variance = 0.0;
+        if (count > 1) {
+            double squared_diff_sum = 0.0;
+            for (int n = 0; n < N; ++n) {
+                const double diff = obs_data[n][i] - normal_mean;
+                squared_diff_sum += diff * diff;
+            }
+            sample_variance = squared_diff_sum / static_cast<double>(count - 1);
+        }
+        double mean_variance = (count > 0) ? (sample_variance / static_cast<double>(count)) : 0.0;
+        double std_error = std::sqrt(mean_variance);
         double avg_steps = (N > 0) ? (static_cast<double>(total_steps_per_point[i]) / N) : 0.0;
-        stats[i] = { count, normal_mean, avg_steps };
+        stats[i] = { count, normal_mean, sample_variance, mean_variance, std_error, avg_steps };
     }
     write_robin_diagnostics_to_json(start_points, stats, diagnostic_sums, N,
         tail_mode == TailMode::Gt ? "gt" : "none",

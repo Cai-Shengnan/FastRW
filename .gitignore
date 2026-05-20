@@ -1,24 +1,15 @@
+# Build artifacts
 build/
 build-metal/
-outputs/
+
+# Generated data and outputs (populated by fetch_artifacts.sh and reproduce.sh)
 data/
-scripts/
-configs/
-.vscode/
+outputs/
+
+# Artifact archive (downloaded by user, extracted by fetch_artifacts.sh)
+resrw-artifacts-*.zip
+
+# Editor / OS
 .DS_Store
-
-*.bin
-*.csv
-*.json
-*.npy
-
-data/**/*.npz
-data/**/*.zip
-legacy/**/*.zip
-
-third_party/cmdstan/
-third_party/eigen-3.4.0/
-stan/bin/
-stan/*.hpp
-stan/onestage
-stan/HBMmodel
+.vscode/
+.claude/

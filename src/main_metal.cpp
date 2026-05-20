@@ -109,7 +109,6 @@ int main(int argc, char** argv) {
 
     fs::create_directories(config.output.directory);
     const fs::path csv_path = config.output.directory / config.output.csv;
-    const fs::path compat_csv_path = config.output.directory / "FastRw.csv";
     const fs::path constraints_path = config.output.directory / config.output.constraints;
     const fs::path diagnostics_path = config.output.directory / config.output.diagnostics;
 
@@ -123,15 +122,10 @@ int main(int argc, char** argv) {
     );
 
     std::ofstream csv_file(csv_path);
-    std::ofstream compat_csv_file;
-    if (csv_path.filename() != compat_csv_path.filename()) {
-        compat_csv_file.open(compat_csv_path);
-    }
     auto write_header = [](std::ofstream& out) {
-        if (out) out << "Point,X,Y,Z,Direct_Mean,GT_Temperature,Direct_Error,Avg_Steps\n";
+        if (out) out << "Point,X,Y,Z,Direct_Mean,GT_Temperature,Direct_Error,Direct_SampleVar,Direct_MeanVar,Direct_StdError,Avg_Steps\n";
     };
     write_header(csv_file);
-    write_header(compat_csv_file);
 
     for (size_t i = 0; i < stats.size(); ++i) {
         const auto& s = stats[i];
@@ -150,17 +144,14 @@ int main(int argc, char** argv) {
                 out << i << ","
                     << p[2] << "," << p[1] << "," << p[0] << ","
                     << s.normal_mean << "," << gt_temp << "," << error << ","
+                    << s.sample_variance << "," << s.mean_variance << "," << s.std_error << ","
                     << s.avg_steps << "\n";
             }
         };
         write_row(csv_file);
-        write_row(compat_csv_file);
     }
 
     std::cout << "Results saved to " << csv_path << std::endl;
-    if (compat_csv_file) {
-        std::cout << "Compatibility results saved to " << compat_csv_path << std::endl;
-    }
     std::cout << "Constraints saved to " << constraints_path << std::endl;
     return 0;
 }

@@ -1,6 +1,10 @@
-name: FastRW
+name: fastrw
 channels:
   - conda-forge
 dependencies:
   - cmake>=3.24
   - ninja
+  - nodejs>=18
+  - python>=3.10
+  - numpy
+  - matplotlib

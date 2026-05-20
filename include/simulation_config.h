@@ -32,7 +32,7 @@ struct SimulationConfig {
         BoundaryConfig top;
         BoundaryConfig bottom;
         BoundaryConfig lateral;
-        double strip_ratio = 1.56;
+        double rho = 1.56;
         double eps_dirichlet = 1e-8;
         double eps_neumann = 1.56 * 5e-7;
         double eps_robin = 1.56 * 5e-7;

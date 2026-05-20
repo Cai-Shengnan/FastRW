@@ -1353,10 +1353,22 @@ struct RandomWalkerMetal::Impl {
 
 	            write_constraints_to_json(all_pass_samples, M, N, obs_data, constraints_json, pass_overflow_paths);
 
-	            std::vector<MultiPointStats> stats(M);
-		            for (int i = 0; i < M; ++i) {
-		                stats[i] = {N, sums[i] / static_cast<double>(N), static_cast<double>(step_sums[i]) / static_cast<double>(N)};
-		            }
+		            std::vector<MultiPointStats> stats(M);
+			            for (int i = 0; i < M; ++i) {
+			                double normal_mean = sums[i] / static_cast<double>(N);
+			                double sample_variance = 0.0;
+			                if (N > 1) {
+			                    double squared_diff_sum = 0.0;
+			                    for (int n = 0; n < N; ++n) {
+			                        const double diff = obs_data[n][i] - normal_mean;
+			                        squared_diff_sum += diff * diff;
+			                    }
+			                    sample_variance = squared_diff_sum / static_cast<double>(N - 1);
+			                }
+			                double mean_variance = sample_variance / static_cast<double>(N);
+			                double std_error = std::sqrt(mean_variance);
+			                stats[i] = {N, normal_mean, sample_variance, mean_variance, std_error, static_cast<double>(step_sums[i]) / static_cast<double>(N)};
+			            }
 		            write_metal_diagnostics_to_json(
 		                geom,
 		                start_points,
