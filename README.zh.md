@@ -21,6 +21,7 @@ FasterRW** 算法的复现实验框架。
 ## 目录
 
 - [快速开始](#快速开始)
+- [预期结果](#预期结果)
 - [仓库结构](#仓库结构)
 - [复现流程](#复现流程)
 - [分阶段手动调用](#分阶段手动调用)
@@ -57,6 +58,46 @@ HTML 文件，所有表格已渲染、所有 bootstrap 图已 base64 内嵌。
 ```bash
 ./scripts/fetch_artifacts.sh
 ```
+
+---
+
+## 预期结果
+
+`reproduce.sh` 在 Apple Silicon Metal 上可逐比特复现论文中的所有表格
+和图。`outputs/report.html` 中的关键指标应当与下面一致：
+
+**Table 1 —— 等精度下相对 PIRW 的工作量（N·steps）加速比**
+
+|   | ε = 0.4 K | ε = 0.5 K |
+| - | --------- | --------- |
+| Case 1 FastRW   | 5.2× | 5.2× |
+| Case 1 FasterRW | **8.7×**  | **10.5×** |
+| Case 2 FastRW   | 5.2× | 5.2× |
+| Case 2 FasterRW | **10.5×** | **8.7×** |
+| Case 3 FastRW   | 3.7× | 4.2× |
+| Case 3 FasterRW | **24.5×** | **28.0×** |
+
+**tab:time（Case 1，ε = 0.4 K，墙钟分解）** —— FasterRW 端到端
+**> 7.61×** PIRW（FastRW > 4.88×）。随机游走阶段是主要成本：
+PIRW 5.79 s vs FastRW 1.11 s vs FasterRW 0.66 s per query；
+FEM 先验摊销成本 < 0.06 s/query。
+
+**tab:multi（Case 1，N = 1000）** —— FasterRW 的每点等效路径数加速比
+从 1.00×（G=1）增长到 **3.79× ± 0.90**（G=16）；FastRW 从 1.00×
+增长到 1.85× ± 0.25。
+
+**tab:tradeoff（Case 1）** —— 随着先验改善，随机游走的每点墙钟时间
+从 2.14 s（DoF=699，ε_max=8.71 K，Λ=0.013）下降到 **1.19 s**
+（DoF=10254，ε_max=1.26 K，Λ=0.090）。
+
+**tab:weakprior（Case 1，ε = 0.4 K）** —— 即便使用刻意粗糙的
+"环境温度均匀场" 先验（ε_max = 43.7 K），FastRW 仍能取得 1.66×
+墙钟加速、FasterRW 取得 3.32× 墙钟加速。
+
+**Fig. bootstrap** —— 每个 case 三条单调下降的 avg|err| 曲线
+（PIRW > FastRW > FasterRW），在 Table 1 所选工作点处标有标记。
+
+`outputs/report.html` 中的数字如与上表不一致，即视为回归。
 
 ---
 

@@ -47,12 +47,11 @@ const B = 500;
 const SEED = 42;
 const REPEATS = 3;
 
-// Paper-locked N for case1 at eps=0.4 K (per outputs/tcad_table1/paper_results
-// for PIRW; FastRW / FasterRW use the more conservative wallclock-breakdown N
-// historically used in the TCAD tab:time table).
+// Paper-locked N for case1 at eps=0.4 K (matches outputs/tcad_table1/paper_results
+// and the published Table 1 — same N used across tab:single and tab:time).
 const N_PIRW = 1280;
-const N_FASTRW = 896;
-const N_FASTERRW = 512;
+const N_FASTRW = 640;
+const N_FASTERRW = 384;
 
 const PIRW_RUN_DIR = path.join(ROOT_DIR, 'outputs', 'tcad_table1', 'pirw_case1');
 const FASTRW_RUN_DIR = path.join(ROOT_DIR, 'outputs', 'tcad_table1', 'fastrw_case1');
@@ -226,7 +225,7 @@ function main() {
       `--seed=${SEED}`,
       `--output=${scratchOut(`fasterrw_N${N_FASTERRW}.json`)}`,
     ],
-    'fasterrw_post N=512'
+    `fasterrw_post N=${N_FASTERRW}`
   );
 
   // Per-query amortized post-processing times

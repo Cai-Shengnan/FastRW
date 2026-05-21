@@ -23,6 +23,7 @@ a single one-key driver.
 ## Contents
 
 - [Quick start](#quick-start)
+- [Expected results](#expected-results)
 - [Layout](#layout)
 - [Reproduction flow](#reproduction-flow)
 - [Manual per-phase invocation](#manual-per-phase-invocation)
@@ -60,6 +61,48 @@ If you want to extract the artifact zip manually (e.g. inspect the
 ```bash
 ./scripts/fetch_artifacts.sh
 ```
+
+---
+
+## Expected results
+
+`reproduce.sh` reproduces every table and figure in the paper bit-for-bit
+(on Apple-Silicon Metal) from the shipped Phase-1 MC. The headline
+numbers in `outputs/report.html` should be:
+
+**Table 1 — iso-accuracy speedup (N·steps over PIRW)**
+
+|   | ε = 0.4 K | ε = 0.5 K |
+| - | --------- | --------- |
+| Case 1 FastRW   | 5.2× | 5.2× |
+| Case 1 FasterRW | **8.7×**  | **10.5×** |
+| Case 2 FastRW   | 5.2× | 5.2× |
+| Case 2 FasterRW | **10.5×** | **8.7×** |
+| Case 3 FastRW   | 3.7× | 4.2× |
+| Case 3 FasterRW | **24.5×** | **28.0×** |
+
+**tab:time (Case 1, ε = 0.4 K, wallclock breakdown)** — FasterRW >
+**7.61×** end-to-end over PIRW (FastRW > 4.88×). Random-walk stage is
+the dominant cost: PIRW 5.79 s vs FastRW 1.11 s vs FasterRW 0.66 s
+per query; FEM-prior amortized cost is < 0.06 s/query.
+
+**tab:multi (Case 1, N = 1000)** — FasterRW per-query equivalent
+path-count grows from 1.00× (G=1) to **3.79× ± 0.90** (G=16); FastRW
+from 1.00× to 1.85× ± 0.25.
+
+**tab:tradeoff (Case 1)** — RW per-query wallclock drops from 2.14 s
+(DoF=699, ε_max=8.71 K, Λ=0.013) to **1.19 s** (DoF=10254, ε_max=1.26 K,
+Λ=0.090) as the prior improves.
+
+**tab:weakprior (Case 1, ε = 0.4 K)** — Even with a deliberately crude
+uniform-at-ambient prior (ε_max = 43.7 K), FastRW still gets
+1.66× and FasterRW 3.32× wallclock speedup over PIRW.
+
+**Fig. bootstrap** — three monotone-decreasing avg|err| curves per
+case (PIRW > FastRW > FasterRW), with markers at the chosen
+operating point of Table 1.
+
+Any deviation in `outputs/report.html` from these numbers is a regression.
 
 ---
 
