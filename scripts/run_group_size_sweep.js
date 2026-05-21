@@ -3,15 +3,24 @@
 // run_group_size_sweep.js
 //
 // Purpose
-//   Group-size sweep for Table `tab:multi` (Group Size effect). For
-//   each group size G in {1, 4, 8, 16} we partition the M=16 query
-//   points into K_G = floor(M/G) disjoint subgroups of G consecutive
-//   points (so every query point is used exactly once per G). For
-//   each subgroup we run B bootstrap trials at fixed N path-budget,
-//   reusing the long MC run produced by run_fastrw_direct.sh, and
-//   compute the per-subgroup avg_abs error AND the per-query-point
-//   bootstrap variance of the fused / GP-corrected estimate under
-//   both
+//   Group-size sweep for Table `tab:multi` (Group Size effect) in the
+//   TCAD paper. For each group size G in {1, 4, 8, 16} we partition
+//   the M=16 query points into K_G = floor(M/G) disjoint subgroups of
+//   G consecutive points (so every query point is used exactly once
+//   per G). For each subgroup we run B bootstrap trials at fixed N
+//   path-budget, reusing the long MC run produced by
+//   run_fastrw_direct.sh, and report two paper-facing quantities for
+//   both methods:
+//
+//     * Err. (K)         = mean over B trials of mean_{x in subgroup}
+//                          |T_hat(x) - GT(x)|, then averaged over
+//                          subgroups. (Paper's "Err. (K)" column.)
+//     * per-query N_hat  = N * Var_single(T_hat(x)) / Var_fused(T_hat(x); G),
+//                          per query point, then mean +/- std over
+//                          the M=16 query points. (Paper's hat{N}/N
+//                          column.)
+//
+//   under both
 //     * FastRW   (Alg. 1+2: inverse-variance fusion, no-self tail
 //                 reuse, ALPHA_MIN = 0.3); and
 //     * FasterRW (Alg. 1+2+3: FastRW + universal-kriging GP on the
@@ -26,51 +35,36 @@
 //   amplitude grid are byte-identical to those scripts.
 //
 // =====================================================================
-//                  TWO METRICS REPORTED IN THIS SCRIPT
+//                  PER-QUERY SPEEDUP METRIC (paper definition)
 // =====================================================================
 //
-//   (A) "avg_abs" speedup  (LEGACY, retained for diagnostics only)
-//       --------------------------------------------------------
-//       Var_single(N) = mean over K_1 singleton subgroups of the
-//                       per-subgroup bootstrap variance of avg_abs.
-//       Var_group(N)  = mean over the K_G subgroups of size G of the
-//                       per-subgroup bootstrap variance of avg_abs.
-//       N_hat_avg(G)  = N * Var_single(N) / Var_group(N).
-//       speedup_avg   = N_hat_avg / N.
+//   For each query point x_i:
+//     Var_single(x_i) = bootstrap variance, across the B trials at
+//                       G=1, of the per-point estimate T_hat(x_i)
+//                       when x_i is its own singleton subgroup.
+//     Var_fused(x_i, G) = bootstrap variance, across the B trials at
+//                       group size G, of T_hat(x_i) when x_i is one
+//                       of the G points in its subgroup.
+//     N_hat(x_i, G)   = N * Var_single(x_i) / Var_fused(x_i, G).
 //
-//       This conflates two effects: (i) a trivial 1/G variance
-//       reduction from averaging G independent query-point estimates
-//       and (ii) the actual per-query fusion / GP benefit. It is
-//       NOT the canonical `tab:multi` value.
+//   Reported as:
+//     speedup_per_query(G) = mean over query points of (N_hat / N)
+//     std_per_query(G)     = std over query points of (N_hat / N)
 //
-//   (B) "per_query" speedup  (CANONICAL, matches the legacy paper)
-//       ---------------------------------------------------------
-//       For each query point x_i:
-//         Var_single(x_i) = bootstrap variance, across the B trials
-//                           at G=1, of the per-point estimate
-//                           T_hat(x_i) when x_i is its own singleton
-//                           subgroup.
-//         Var_fused(x_i, G) = bootstrap variance, across the B trials
-//                           at group size G, of T_hat(x_i) when x_i
-//                           is one of the G points in its subgroup.
-//         N_hat(x_i, G)   = N * Var_single(x_i) / Var_fused(x_i, G).
+//   This matches the paper's definition in `tab:multi`:
+//     hat{N}/N = Var_per-query-single / Var_per-query-fused.
 //
-//       Reported as:
-//         speedup_per_query(G) = mean over query points of (N_hat / N)
-//         std_per_query(G)     = std over query points of (N_hat / N)
+//   The point estimate used here is the FastRW fused T_hat(x_i) (the
+//   inverse-variance combination of the direct bootstrap mean at
+//   x_i and the tail-reused samples landing at x_i) and, for
+//   FasterRW, the GP-corrected T_eps(x_i) = prior(x_i) - epsHat(x_i).
+//   Both are *per-query* scalars, NOT averages over the subgroup.
 //
-//       This matches the legacy paper's definition
-//         hat{N}(x) = Z(x) / Var[ hat{T}(x) ]
-//       and isolates the *per-query* fusion / cross-target tail-reuse
-//       benefit from the trivial 1/G averaging factor that metric (A)
-//       picks up. At G=1 this is exactly 1.0 by construction.
-//
-//   The point estimate used for metric (B) is the FastRW fused
-//   T_hat(x_i) (the inverse-variance combination of the direct
-//   bootstrap mean at x_i and the tail-reused samples landing at
-//   x_i) and, for FasterRW, the GP-corrected T_eps(x_i) =
-//   prior(x_i) - epsHat(x_i). Both are *per-query* scalars, NOT
-//   averages over the subgroup.
+//   A pseudo-sample is admitted iff BOTH its source query AND its
+//   target query are in the current subgroup (matching the paper's
+//   "user co-queries G points" scenario). Hence at G=1 no tails
+//   survive and T_hat reduces to the direct estimate, giving
+//   speedup = 1x by construction.
 //
 //   Note on FasterRW at G=1: the universal-kriging GP with a single
 //   training point reduces to the identity (epsHat[0] = y[0]), so
@@ -423,9 +417,7 @@ function main() {
 
   // Per-G summary
   const groupSummaries = [];
-  // Per-G average within-subgroup bootstrap variance (legacy avg_abs metric)
-  const meanWithinVarByG = { fastrw: {}, fasterrw: {} };
-  // Per-G per-query bootstrap variance of the point estimate (canonical metric)
+  // Per-G per-query bootstrap variance of the point estimate (paper metric)
   //   perQueryVarByG[method][G] = length-M array indexed by global query idx,
   //   or null where the query was not covered at this G.
   const perQueryVarByG = { fastrw: {}, fasterrw: {} };
@@ -487,10 +479,8 @@ function main() {
       perSubgroup.push({
         k, indices: idxSubset,
         fastrw:   { mean_avg_abs: mean(fastVals),   std_avg_abs: std(fastVals),
-                    within_var: variance(fastVals),
                     per_query_var: fastPerQueryVar },
         fasterrw: { mean_avg_abs: mean(fasterVals), std_avg_abs: std(fasterVals),
-                    within_var: variance(fasterVals),
                     per_query_var: fasterPerQueryVar },
       });
     }
@@ -498,11 +488,6 @@ function main() {
     // Aggregate across subgroups
     const fastrwMeans = perSubgroup.map((s) => s.fastrw.mean_avg_abs);
     const fasterrwMeans = perSubgroup.map((s) => s.fasterrw.mean_avg_abs);
-    const fastrwWithinVar = mean(perSubgroup.map((s) => s.fastrw.within_var));
-    const fasterrwWithinVar = mean(perSubgroup.map((s) => s.fasterrw.within_var));
-
-    meanWithinVarByG.fastrw[G] = fastrwWithinVar;
-    meanWithinVarByG.fasterrw[G] = fasterrwWithinVar;
 
     // Per-query bootstrap variance, indexed by global query idx
     const perQueryVarFast = pointSamplesFast.map((arr) => arr == null ? null : variance(arr));
@@ -515,13 +500,11 @@ function main() {
       subgroup_indices: subsets,
       fastrw: {
         per_subgroup: perSubgroup.map((s) => s.fastrw),
+        // Paper's "Err. (K)" column: mean / std (across subgroups) of the
+        // per-subgroup mean-of-|err| over the B trials.
         mean_avg_abs: mean(fastrwMeans),
         std_avg_abs: K > 1 ? std(fastrwMeans) : perSubgroup[0].fastrw.std_avg_abs,
-        mean_within_var: fastrwWithinVar,
-        // Legacy avg_abs-based fields (filled below)
-        N_hat: null,
-        speedup: null,
-        // Per-query (canonical tab:multi) fields (filled below)
+        // Per-query speedup (paper's hat{N}/N column; filled below)
         per_query_var: perQueryVarFast,
         per_query_N_hat: null,
         per_query_speedup: null,
@@ -532,9 +515,6 @@ function main() {
         per_subgroup: perSubgroup.map((s) => s.fasterrw),
         mean_avg_abs: mean(fasterrwMeans),
         std_avg_abs: K > 1 ? std(fasterrwMeans) : perSubgroup[0].fasterrw.std_avg_abs,
-        mean_within_var: fasterrwWithinVar,
-        N_hat: null,
-        speedup: null,
         per_query_var: perQueryVarFaster,
         per_query_N_hat: null,
         per_query_speedup: null,
@@ -544,26 +524,7 @@ function main() {
     });
   }
 
-  // ----- Fill in metric (A): legacy avg_abs speedup ---------------------
-  // Uses the G=1 within-subgroup avg_abs variance as the single-query
-  // baseline. If 1 is not in --groups, the speedup is reported as null.
-  const haveBaseline = (1 in meanWithinVarByG.fastrw) && (1 in meanWithinVarByG.fasterrw);
-  if (haveBaseline) {
-    const v1Fast = meanWithinVarByG.fastrw[1];
-    const v1Faster = meanWithinVarByG.fasterrw[1];
-    for (const g of groupSummaries) {
-      const vG_fast = meanWithinVarByG.fastrw[g.G];
-      const vG_faster = meanWithinVarByG.fasterrw[g.G];
-      const speedup_fast = vG_fast > 0 ? v1Fast / vG_fast : null;
-      const speedup_faster = vG_faster > 0 ? v1Faster / vG_faster : null;
-      g.fastrw.N_hat = speedup_fast == null ? null : args.N * speedup_fast;
-      g.fastrw.speedup = speedup_fast;
-      g.fasterrw.N_hat = speedup_faster == null ? null : args.N * speedup_faster;
-      g.fasterrw.speedup = speedup_faster;
-    }
-  }
-
-  // ----- Fill in metric (B): canonical per-query speedup ----------------
+  // ----- Fill in per-query speedup (paper's hat{N}/N) -------------------
   // For each query point i and each G, compute
   //   N_hat(i, G) = N * Var_single(i) / Var_fused(i, G).
   // Aggregate by reporting mean +/- std of N_hat/N across query points.
@@ -611,17 +572,12 @@ function main() {
     alpha_min: ALPHA_MIN,
     grouped_records: grouped.total,
     with_replacement: true,
-    // Documentation of the two metrics, embedded in the output for traceability.
-    metrics: {
-      legacy_avg_abs: {
-        description: "Speedup = Var_single(avg_abs) / Var_group(avg_abs), where Var is the bootstrap variance of the per-subgroup mean-of-|err|. Confounds the trivial 1/G averaging factor with the per-query fusion benefit. NOT canonical.",
-        fields: ["mean_within_var", "N_hat", "speedup"],
-      },
-      per_query: {
-        description: "Speedup = Var_single(T_hat(x_i)) / Var_fused(T_hat(x_i); G), per query point, then averaged across queries. T_hat(x_i) is the FastRW fused estimate (or FasterRW T_eps) at x_i, NOT the avg_abs error. Matches the legacy paper's hat{N}(x) = Z(x)/Var[hat{T}(x)] definition. CANONICAL tab:multi value.",
-        fields: ["per_query_var", "per_query_N_hat", "per_query_speedup", "per_query_speedup_mean", "per_query_speedup_std"],
-        notes: "At G=1 the speedup is exactly 1 for both methods by construction. FasterRW with G=1 is degenerate (universal-kriging GP with one training point reduces to the identity, so T_eps = FastRW fused), so the G=1 row for FasterRW also reads 1x; the FastRW G=1 row is the canonical baseline.",
-      },
+    // Documentation of the metric, embedded in the output for traceability.
+    metric: {
+      description: "Per-query equivalent path count hat{N}/N = Var_single(T_hat(x_i)) / Var_fused(T_hat(x_i); G), per query point, then averaged across queries. T_hat(x_i) is the FastRW fused estimate (or FasterRW T_eps) at x_i. Matches the paper's tab:multi definition.",
+      fields: ["per_query_var", "per_query_N_hat", "per_query_speedup", "per_query_speedup_mean", "per_query_speedup_std"],
+      err_column: "mean_avg_abs / std_avg_abs are the paper's 'Err. (K)' column: per-subgroup mean of |T_hat - GT| over the G points, averaged over B trials and over subgroups.",
+      notes: "At G=1 the speedup is exactly 1 for both methods by construction. FasterRW with G=1 is degenerate (universal-kriging GP with one training point reduces to the identity, so T_eps = FastRW fused), so the G=1 row for FasterRW also reads 1x; the FastRW G=1 row is the baseline.",
     },
     groups: groupSummaries,
     mean_avg_steps: meanAvgSteps,
@@ -632,8 +588,8 @@ function main() {
   fs.mkdirSync(path.dirname(args.outputPath), { recursive: true });
   fs.writeFileSync(args.outputPath, `${JSON.stringify(out, null, 2)}\n`);
 
-  process.stderr.write("\n[group_size_sweep] Summary (CANONICAL = per-query metric):\n");
-  process.stderr.write("  G    K    FastRW per-q speedup (mean +/- std)   FasterRW per-q speedup (mean +/- std)\n");
+  process.stderr.write("\n[group_size_sweep] Summary (per-query hat{N}/N, paper tab:multi):\n");
+  process.stderr.write("  G    K    FastRW Err.(K)  FastRW hat{N}/N            FasterRW Err.(K)  FasterRW hat{N}/N\n");
   for (const g of groupSummaries) {
     const f = g.fastrw.per_query_speedup_mean;
     const fs_ = g.fastrw.per_query_speedup_std;
@@ -642,17 +598,10 @@ function main() {
     const fmt = (m, s) => m == null ? "n/a" : `${m.toFixed(2)}x +/- ${s.toFixed(2)}`;
     process.stderr.write(
       `  ${String(g.G).padStart(2)}   ${String(g.K).padStart(2)}   ` +
-      `${fmt(f, fs_).padStart(28)}     ${fmt(x, xs).padStart(28)}\n`
-    );
-  }
-  process.stderr.write("\n[group_size_sweep] (LEGACY avg_abs metric, for reference only):\n");
-  process.stderr.write("  G    K    FastRW avg_abs speedup        FasterRW avg_abs speedup\n");
-  for (const g of groupSummaries) {
-    const fSp = g.fastrw.speedup == null ? "n/a" : g.fastrw.speedup.toFixed(2) + "x";
-    const xSp = g.fasterrw.speedup == null ? "n/a" : g.fasterrw.speedup.toFixed(2) + "x";
-    process.stderr.write(
-      `  ${String(g.G).padStart(2)}   ${String(g.K).padStart(2)}   ` +
-      `${fSp.padStart(7)}                       ${xSp.padStart(7)}\n`
+      `${g.fastrw.mean_avg_abs.toFixed(3).padStart(7)}        ` +
+      `${fmt(f, fs_).padStart(22)}     ` +
+      `${g.fasterrw.mean_avg_abs.toFixed(3).padStart(7)}          ` +
+      `${fmt(x, xs).padStart(22)}\n`
     );
   }
   process.stderr.write(`\n[group_size_sweep] Wrote ${args.outputPath}\n`);

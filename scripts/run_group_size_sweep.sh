@@ -13,23 +13,20 @@
 #     - groups = 1,4,8,16
 #
 #   For each G we partition the M=16 query points into floor(M/G)
-#   disjoint subgroups of G consecutive points and report TWO metrics:
+#   disjoint subgroups of G consecutive points and report (matching
+#   the columns of paper Table `tab:multi`):
 #
-#     (A) "avg_abs" speedup [LEGACY, diagnostics only]
-#           N_hat(G) = N * Var_single(avg_abs) / Var_group(avg_abs)
-#         This confounds the trivial 1/G averaging factor with the
-#         per-query fusion benefit. Kept for backwards comparison.
+#     Err. (K)        per-subgroup mean |T_hat - GT| averaged over the
+#                     B bootstrap trials and over subgroups.
 #
-#     (B) "per_query" speedup [CANONICAL tab:multi metric]
-#           N_hat(x_i, G) = N * Var_single(T_hat(x_i))
-#                             / Var_fused(T_hat(x_i); G)
-#         Reported as mean +/- std of N_hat/N over the M query
-#         points. T_hat(x_i) is the FastRW fused (or FasterRW
-#         T_eps) per-point estimate. Matches the legacy paper's
-#         hat{N}(x) = Z(x) / Var[hat{T}(x)] definition. At G=1 the
-#         speedup is exactly 1x for both methods by construction
-#         (FasterRW at G=1 is degenerate: GP w/ a single training
-#         point reduces to the identity).
+#     hat{N}/N        N * Var_single(T_hat(x_i)) / Var_fused(T_hat(x_i); G)
+#                     per query point, then reported as mean +/- std
+#                     over the M query points. T_hat(x_i) is the
+#                     FastRW fused (or FasterRW T_eps) per-point
+#                     estimate. At G=1 this is exactly 1x for both
+#                     methods by construction (no tail survives the
+#                     intra-subgroup filter; FasterRW's GP with a
+#                     single training point reduces to the identity).
 #
 #   FastRW   = Alg. 1+2 (inverse-variance fusion, no-self tail reuse)
 #   FasterRW = Alg. 1+2+3 (FastRW + universal-kriging GP residual)
