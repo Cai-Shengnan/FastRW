@@ -172,7 +172,7 @@ def plot_one_case(case):
     ax.set_ylim(ymin, YMAX)
     ax.yaxis.set_major_locator(MultipleLocator(0.5))
 
-    ax.set_xlabel(r"Total path-steps  $N \times \overline{\mathrm{steps}}$  ($\times 10^9$)",
+    ax.set_xlabel(r"Workload  $N \times \mathrm{steps}$  ($\times 10^9$)",
                   fontsize=FS)
     ax.set_ylabel("avg abs error (K)", fontsize=FS)
     ax.tick_params(axis="both", labelsize=FS)
