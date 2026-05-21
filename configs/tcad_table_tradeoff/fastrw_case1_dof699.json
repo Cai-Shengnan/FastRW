@@ -28,7 +28,7 @@
   },
   "walker": {
     "max_steps": 50000000,
-    "cutoff_weight": 0.010,
+    "cutoff_weight": 0.013,
     "delta_x": 5e-7,
     "use_tail_correction": true,
     "tail_mode": "gt",

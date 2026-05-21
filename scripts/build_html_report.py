@@ -269,6 +269,8 @@ def build_table_time() -> str:
 
     n = data.get("N", {})
     fem_per = data.get("fem_prior_per_query_s")
+    fem_is_upper = data.get("fem_prior_is_upper_bound", False)
+    fem_log_s = data.get("fem_prior_log_seconds")
     mc_pirw_total = data.get("mc_runtime_full_pirw_s")
     mc_pirw_nmax = data.get("mc_runtime_full_pirw_Nmax")
     mc_fast_total = data.get("mc_runtime_full_fastrw_s")
@@ -304,19 +306,37 @@ def build_table_time() -> str:
     Fast_kr_total = pp_median(f"fasterrw_post_N{n.get('FasterRW')}")
     Fast_kr = (Fast_kr_total - (Fast_fastpost * M)) / M if (Fast_kr_total and not math.isnan(Fast_fastpost)) else math.nan
 
+    if fem_is_upper:
+        fem_fast_disp = f'&lt; {fast_fem:.2f}'
+        fem_faster_disp = f'&lt; {Fast_fem:.2f}'
+    else:
+        fem_fast_disp = f'{fast_fem:.3f}'
+        fem_faster_disp = f'{Fast_fem:.3f}'
+
     rows = [
         '<tr><th>Stage</th><th>PIRW (s/query)</th><th>FastRW (s/query)</th><th>FasterRW (s/query)</th></tr>',
-        f'<tr><td>FEM prior</td><td>&mdash;</td><td>{fast_fem:.3f}</td><td>{Fast_fem:.3f}</td></tr>',
+        f'<tr><td>FEM prior (linear solve)</td><td>&mdash;</td><td>{fem_fast_disp}</td><td>{fem_faster_disp}</td></tr>',
         f'<tr><td>Random walk</td><td>{pirw_rw:.3f}</td><td>{fast_rw:.3f}</td><td>{Fast_rw:.3f}</td></tr>',
         f'<tr><td>Tail-reuse fusion</td><td>&mdash;</td><td>{fast_post:.5f}</td><td>{Fast_fastpost:.5f}</td></tr>',
         f'<tr><td>Kriging refinement</td><td>&mdash;</td><td>&mdash;</td><td>{Fast_kr:.5f}</td></tr>',
     ]
+    fem_note = ''
+    if fem_is_upper:
+        fem_note = (
+            f' The FEM prior cost is reported as the COMSOL MUMPS linear-solve'
+            f' time amortized over M=16 queries. The cold comsol_batch.log for'
+            f' the canonical DoF=1288 prior logs the linear-solve line as'
+            f' &ldquo;{fem_log_s} s&rdquo;; COMSOL\'s batch log only resolves to'
+            f' integer seconds, so under the conservative truncation interpretation'
+            f' the actual solve is strictly less than {fem_log_s + 1} s, i.e.'
+            f' &lt; {(fem_log_s + 1)/M:.2f} s per query.'
+        )
     return (
         '<h2>Table tab:time &mdash; Per-query wallclock breakdown '
         '(Case 1, &epsilon;=0.4 K, M=16)</h2>'
         f'<p class="note">N values: PIRW={n.get("PIRW")}, FastRW={n.get("FastRW")}, '
         f'FasterRW={n.get("FasterRW")}. Random-walk time scales linearly in N. '
-        f'Post-proc reported as median of 3 runs.</p>'
+        f'Post-proc reported as median of 3 runs.{fem_note}</p>'
         '<table>' + "".join(rows) + '</table>'
     )
 

@@ -9,9 +9,12 @@
 //   `tab:time` in the TCAD experiments chapter.
 //
 // Methodology
-//   - FEM prior: total COMSOL solve time / M (=16); read from
-//     data/cases/case1_power6/comsol/comso_1288/metadata.json. PIRW has
-//     no prior (0).
+//   - FEM prior: strict upper bound on per-query COMSOL solve time.
+//     The cold comsol_batch.log for the canonical DoF=1288 prior logs
+//     "求解时间：0 s" (solve time: 0 s), and COMSOL's batch log only
+//     resolves to integer seconds. Under the conservative truncation
+//     interpretation, the actual solve is < 1 s total, i.e.,
+//     < 1/M = 0.0625 s per query. PIRW has no prior (0).
 //   - Random walk: scale the existing N_max MC wallclock linearly:
 //         MC_time(N) = runtime_seconds(N_max) * N / N_max / M
 //     PIRW: pirw_case1 (N_max=4096); FastRW/FasterRW: fastrw_case1 (N_max=8192).
@@ -44,8 +47,10 @@ const B = 500;
 const SEED = 42;
 const REPEATS = 3;
 
-// Paper-locked N for case1 at eps=0.4 K (per outputs/tcad_table1/paper_results)
-const N_PIRW = 1536;
+// Paper-locked N for case1 at eps=0.4 K (per outputs/tcad_table1/paper_results
+// for PIRW; FastRW / FasterRW use the more conservative wallclock-breakdown N
+// historically used in the TCAD tab:time table).
+const N_PIRW = 1280;
 const N_FASTRW = 896;
 const N_FASTERRW = 512;
 
@@ -109,17 +114,33 @@ function main() {
   process.stdout.write(`[wallclock] case1 eps=0.4 K, M=${M_QUERIES}, B=${B}\n`);
   process.stdout.write(`[wallclock] N: PIRW=${N_PIRW}, FastRW=${N_FASTRW}, FasterRW=${N_FASTERRW}\n`);
 
-  // ---- FEM prior (one-time, amortized) ----
-  const comsolMeta = readJson(path.join(COMSOL_DIR, 'metadata.json'));
-  const femTotalS = Number(comsolMeta.runtime_seconds);
-  const femPerQueryS = femTotalS / M_QUERIES;
-  let femSource = 'metadata.json (runtime_seconds)';
-  if (!Number.isFinite(femTotalS) || femTotalS <= 0) {
-    process.stderr.write('[wallclock] ERROR: invalid FEM runtime in metadata.json\n');
-    process.exit(1);
+  // ---- FEM prior (strict upper bound on linear-solve time, amortized) ----
+  // The cold COMSOL batch log emits two "求解时间" lines per study: the first
+  // is the dependent-variable setup, the second is the actual MUMPS linear
+  // solve. Only the linear solve scales with DoF, so we report that one as
+  // the "solve cost" charged to FEM prior. COMSOL's batch log resolves to
+  // integer seconds, so a logged "0 s" is interpreted as a strict upper
+  // bound of 1 s (truncation interpretation, conservative).
+  const comsolLog = fs.readFileSync(path.join(COMSOL_DIR, 'comsol_batch.log'), 'utf-8');
+  const solveLineRe = /求解时间[：:]\s*(\d+)\s*s/g;
+  const solveValues = [];
+  let m;
+  while ((m = solveLineRe.exec(comsolLog)) !== null) {
+    solveValues.push(Number(m[1]));
   }
+  const femSolveLogS = solveValues.length > 0 ? solveValues[solveValues.length - 1] : 0;
+  // Strict upper bound under truncation: logged "X s" means actual < X+1 s.
+  const femSolveUpperBoundS = femSolveLogS + 1;
+  const femTotalS = femSolveUpperBoundS;
+  const femPerQueryS = femTotalS / M_QUERIES;
+  const femSource =
+    `comsol_batch.log: 求解时间 lines = [${solveValues.join(', ')}] s; ` +
+    `linear solve (last line) = ${femSolveLogS} s under COMSOL's integer-` +
+    `second log resolution. Strict upper bound: ${femSolveUpperBoundS} s ` +
+    `(truncation interpretation).`;
   process.stdout.write(
-    `[wallclock] FEM prior: total=${femTotalS.toFixed(3)}s, per-query=${femPerQueryS.toFixed(3)}s\n`
+    `[wallclock] FEM linear-solve: logged=${femSolveLogS}s, ` +
+    `upper bound=${femSolveUpperBoundS}s, per-query upper bound=${femPerQueryS.toFixed(4)}s\n`
   );
 
   // ---- MC scaling from existing N_max runs ----
@@ -145,8 +166,8 @@ function main() {
 
   // ---- Post-processing wallclocks (median of 3) ----
 
-  // (1) PIRW post at N=1536 — for reference only (PIRW has no fusion/GP stage)
-  process.stdout.write('\n[wallclock] timing PIRW post (N=1536)...\n');
+  // (1) PIRW post at N_PIRW — for reference only (PIRW has no fusion/GP stage)
+  process.stdout.write(`\n[wallclock] timing PIRW post (N=${N_PIRW})...\n`);
   const pirwPostT = timeMedian(
     'node',
     [
@@ -155,13 +176,13 @@ function main() {
       `--N=${N_PIRW}`,
       `--B=${B}`,
       `--seed=${SEED}`,
-      `--output=${scratchOut('pirw_N1536.json')}`,
+      `--output=${scratchOut(`pirw_N${N_PIRW}.json`)}`,
     ],
-    'pirw_post N=1536'
+    `pirw_post N=${N_PIRW}`
   );
 
-  // (2) FastRW fusion at N=896 (the FastRW stage time)
-  process.stdout.write('\n[wallclock] timing FastRW fusion post (N=896)...\n');
+  // (2) FastRW fusion at N_FASTRW (the FastRW stage time)
+  process.stdout.write(`\n[wallclock] timing FastRW fusion post (N=${N_FASTRW})...\n`);
   const fusionFastrwT = timeMedian(
     'node',
     [
@@ -171,13 +192,13 @@ function main() {
       `--N=${N_FASTRW}`,
       `--B=${B}`,
       `--seed=${SEED}`,
-      `--output=${scratchOut('fastrw_N896.json')}`,
+      `--output=${scratchOut(`fastrw_N${N_FASTRW}.json`)}`,
     ],
-    'fastrw_post N=896'
+    `fastrw_post N=${N_FASTRW}`
   );
 
-  // (3) FastRW fusion at N=512 (subtraction baseline for FasterRW GP isolation)
-  process.stdout.write('\n[wallclock] timing FastRW fusion post (N=512) for GP isolation...\n');
+  // (3) FastRW fusion at N_FASTERRW (subtraction baseline for FasterRW GP isolation)
+  process.stdout.write(`\n[wallclock] timing FastRW fusion post (N=${N_FASTERRW}) for GP isolation...\n`);
   const fusionAtFasterrwNT = timeMedian(
     'node',
     [
@@ -187,13 +208,13 @@ function main() {
       `--N=${N_FASTERRW}`,
       `--B=${B}`,
       `--seed=${SEED}`,
-      `--output=${scratchOut('fastrw_N512.json')}`,
+      `--output=${scratchOut(`fastrw_N${N_FASTERRW}.json`)}`,
     ],
-    'fastrw_post N=512'
+    `fastrw_post N=${N_FASTERRW}`
   );
 
-  // (4) FasterRW post at N=512 (fusion + GP combined)
-  process.stdout.write('\n[wallclock] timing FasterRW post (N=512)...\n');
+  // (4) FasterRW post at N_FASTERRW (fusion + GP combined)
+  process.stdout.write(`\n[wallclock] timing FasterRW post (N=${N_FASTERRW})...\n`);
   const fasterrwT = timeMedian(
     'node',
     [
@@ -203,7 +224,7 @@ function main() {
       `--N=${N_FASTERRW}`,
       `--B=${B}`,
       `--seed=${SEED}`,
-      `--output=${scratchOut('fasterrw_N512.json')}`,
+      `--output=${scratchOut(`fasterrw_N${N_FASTERRW}.json`)}`,
     ],
     'fasterrw_post N=512'
   );
@@ -236,8 +257,11 @@ function main() {
 
     fem_prior_total_s: femTotalS,
     fem_prior_per_query_s: femPerQueryS,
+    fem_prior_is_upper_bound: true,
+    fem_prior_log_seconds: femSolveLogS,
+    fem_prior_log_solve_values: solveValues,
     fem_prior_source: femSource,
-    fem_prior_source_path: path.relative(ROOT_DIR, path.join(COMSOL_DIR, 'metadata.json')),
+    fem_prior_source_path: path.relative(ROOT_DIR, path.join(COMSOL_DIR, 'comsol_batch.log')),
 
     mc_runtime_full_pirw_s: pirwMcFullS,
     mc_runtime_full_pirw_Nmax: pirwNmax,
@@ -246,10 +270,10 @@ function main() {
     mc_scaling: 'linear in N, divided by M queries',
 
     postproc_wallclock_s: {
-      pirw_post_N1536: { median: pirwPostT.median, samples: pirwPostT.samples },
-      fastrw_post_N896: { median: fusionFastrwT.median, samples: fusionFastrwT.samples },
-      fastrw_post_N512: { median: fusionAtFasterrwNT.median, samples: fusionAtFasterrwNT.samples },
-      fasterrw_post_N512: { median: fasterrwT.median, samples: fasterrwT.samples },
+      [`pirw_post_N${N_PIRW}`]: { median: pirwPostT.median, samples: pirwPostT.samples },
+      [`fastrw_post_N${N_FASTRW}`]: { median: fusionFastrwT.median, samples: fusionFastrwT.samples },
+      [`fastrw_post_N${N_FASTERRW}`]: { median: fusionAtFasterrwNT.median, samples: fusionAtFasterrwNT.samples },
+      [`fasterrw_post_N${N_FASTERRW}`]: { median: fasterrwT.median, samples: fasterrwT.samples },
     },
 
     stages: {
@@ -292,8 +316,9 @@ function main() {
   process.stdout.write('\n');
   process.stdout.write('Stage              | PIRW   | FastRW | FasterRW\n');
   process.stdout.write('-------------------+--------+--------+---------\n');
+  const femDisplay = `<${femPerQueryS.toFixed(2)}`;
   process.stdout.write(
-    `FEM prior          | ${fmt(0).padStart(6)} | ${fmt(femPerQueryS).padStart(6)} | ${fmt(femPerQueryS).padStart(7)}\n`
+    `FEM prior          | ${fmt(0).padStart(6)} | ${femDisplay.padStart(6)} | ${femDisplay.padStart(7)}\n`
   );
   process.stdout.write(
     `Random walk        | ${mcPirwS.toFixed(2).padStart(6)} | ${mcFastrwS.toFixed(2).padStart(6)} | ${mcFasterrwS.toFixed(2).padStart(7)}\n`

@@ -33,23 +33,26 @@ const os = require("os");
 const ROOT_DIR = path.resolve(__dirname, "..");
 const COMSOL_BIN = "/Applications/COMSOL62/Multiphysics/bin/comsol";
 
-// User-supplied prior-error values (from earlier manual measurement; the
-// `metadata.json` errors disagree with the values referenced in the TCAD
-// table; we use the table-locked values for reporting).
+// Prior-error values reported here are the GLOBAL max |T_prior - T_GT|
+// over the full heat-layer cell-center grid (matches the max_abs field
+// in each `data/cases/case1_power6/comsol/comso_<dof>/metadata.json`).
+// Lambda is then chosen so that the threshold-induced bias bound
+// Lambda * max_err_K stays roughly constant across the three DoFs
+// (~0.11 K, well below the iso-accuracy targets eps in {0.4, 0.5} K).
 const ROWS = [
   {
     dof: 699,
-    max_err_K: 4.83,
-    avg_err_K: 1.81,
-    lambda: 0.010,
+    max_err_K: 8.71,
+    avg_err_K: 2.74,
+    lambda: 0.013,
     config: path.join(ROOT_DIR, "configs/tcad_table_tradeoff/fastrw_case1_dof699.json"),
     out_dir: path.join(ROOT_DIR, "outputs/tcad_table_tradeoff/dof699"),
     comsol_dir: path.join(ROOT_DIR, "data/cases/case1_power6/comsol/comso_699"),
   },
   {
     dof: 1288,
-    max_err_K: 1.43,
-    avg_err_K: 0.71,
+    max_err_K: 3.76,
+    avg_err_K: 0.74,
     lambda: 0.030,
     config: path.join(ROOT_DIR, "configs/tcad_table_tradeoff/fastrw_case1_dof1288.json"),
     out_dir: path.join(ROOT_DIR, "outputs/tcad_table_tradeoff/dof1288"),
@@ -57,9 +60,9 @@ const ROWS = [
   },
   {
     dof: 10254,
-    max_err_K: 0.37,
-    avg_err_K: 0.14,
-    lambda: 0.100,
+    max_err_K: 1.26,
+    avg_err_K: 0.23,
+    lambda: 0.090,
     config: path.join(ROOT_DIR, "configs/tcad_table_tradeoff/fastrw_case1_dof10254.json"),
     out_dir: path.join(ROOT_DIR, "outputs/tcad_table_tradeoff/dof10254"),
     comsol_dir: path.join(ROOT_DIR, "data/cases/case1_power6/comsol/comso_10254"),
