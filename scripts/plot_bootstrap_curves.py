@@ -60,8 +60,6 @@ COLORS = {
     "fasterrw": "#e36209",   # orange
 }
 
-XMIN, XMAX = 32, 4096
-
 # Unified font size for every text element.
 FS = 20
 
@@ -70,21 +68,31 @@ YMAX = 1.5
 
 
 def load_curve(json_path: Path, prefix: str):
-    """Return (Ns, means, stds) sorted by N for the given method prefix."""
+    """Return (Xs, means, stds) sorted by X = N * mean_avg_steps.
+
+    X measures total path-step work (the fair compute-cost axis): PIRW
+    paths run full length, FastRW truncates, so the same N corresponds
+    to very different amounts of work.
+    """
     with open(json_path) as f:
         data = json.load(f)
     rows = sorted(data["results"], key=lambda r: r["N"])
+    # Per-N mean_avg_steps if present (FastRW sweeps log it per row);
+    # otherwise fall back to the top-level scalar.
+    fallback_steps = data.get("mean_avg_steps")
+    steps = np.array([r.get("mean_avg_steps", fallback_steps) for r in rows], dtype=float)
     Ns = np.array([r["N"] for r in rows], dtype=float)
+    Xs = Ns * steps
     means = np.array([r[f"{prefix}_avg_abs_mean"] for r in rows], dtype=float)
     stds = np.array([r[f"{prefix}_avg_abs_std"] for r in rows], dtype=float)
-    return Ns, means, stds
+    return Xs, means, stds
 
 
-def pick_N_star(Ns, means, eps):
-    """Smallest N where mean <= eps."""
-    for n, m in sorted(zip(Ns.tolist(), means.tolist())):
+def pick_x_star(Xs, means, eps):
+    """Smallest X where mean <= eps."""
+    for x, m in sorted(zip(Xs.tolist(), means.tolist())):
         if m <= eps:
-            return n, m
+            return x, m
     return None
 
 
@@ -97,66 +105,75 @@ def plot_one_case(case):
                 f"{p} not found -- run scripts/run_bootstrap_sweep.sh first."
             )
 
-    pN, pM, pS = load_curve(pirw_json, "direct")
-    fN, fM, fS = load_curve(fastrw_json, "fastrw")
-    feN, feM, feS = load_curve(fastrw_json, "fasterrw")
+    pX, pM, pS = load_curve(pirw_json, "direct")
+    fX, fM, fS = load_curve(fastrw_json, "fastrw")
+    feX, feM, feS = load_curve(fastrw_json, "fasterrw")
+
+    # Rescale to billions of path-steps for axis readability.
+    UNIT = 1e9
+    pXu, fXu, feXu = pX / UNIT, fX / UNIT, feX / UNIT
 
     fig, ax = plt.subplots(figsize=(7, 5), dpi=150)
 
-    def plot_curve(ax, Ns, means, stds, color, label):
-        ax.plot(Ns, means, color=color, lw=3.6, label=label, marker="o", ms=7)
-        ax.fill_between(Ns, means - stds, means + stds, color=color, alpha=0.18, linewidth=0)
+    def plot_curve(ax, Xs, means, stds, color, label):
+        ax.plot(Xs, means, color=color, lw=3.6, label=label, marker="o", ms=7)
+        ax.fill_between(Xs, means - stds, means + stds, color=color, alpha=0.18, linewidth=0)
 
-    plot_curve(ax, pN, pM, pS, COLORS["pirw"], "PIRW")
-    plot_curve(ax, fN, fM, fS, COLORS["fastrw"], "FastRW")
-    plot_curve(ax, feN, feM, feS, COLORS["fasterrw"], "FasterRW")
+    plot_curve(ax, pXu, pM, pS, COLORS["pirw"], "PIRW")
+    plot_curve(ax, fXu, fM, fS, COLORS["fastrw"], "FastRW")
+    plot_curve(ax, feXu, feM, feS, COLORS["fasterrw"], "FasterRW")
+
+    # x range: union of all three curves on log scale.
+    xmin = float(min(pXu.min(), fXu.min(), feXu.min()))
+    xmax = float(max(pXu.max(), fXu.max(), feXu.max()))
+    # Pad in log space.
+    log_pad = 0.04 * (np.log10(xmax) - np.log10(xmin))
+    xlo = 10 ** (np.log10(xmin) - log_pad)
+    xhi = 10 ** (np.log10(xmax) + log_pad)
 
     # Horizontal eps guide lines (dashed; labelled on the right at FS).
     for eps in EPS_LIST:
         ax.axhline(eps, color="#888", ls="--", lw=1.2, alpha=0.7)
-        ax.text(XMAX * 1.02, eps, f"  ε={eps}", va="center", ha="left",
+        ax.text(xhi * 1.02, eps, f"  ε={eps}", va="center", ha="left",
                 fontsize=FS, color="#555")
 
-    # Mark N* per (method, eps) with hollow circles only (no text label).
-    for Ns, means, color in [
-        (pN, pM, COLORS["pirw"]),
-        (fN, fM, COLORS["fastrw"]),
-        (feN, feM, COLORS["fasterrw"]),
+    # Mark X* per (method, eps) with hollow circles only (no text label).
+    for Xs, means, color in [
+        (pXu, pM, COLORS["pirw"]),
+        (fXu, fM, COLORS["fastrw"]),
+        (feXu, feM, COLORS["fasterrw"]),
     ]:
         for eps in EPS_LIST:
-            star = pick_N_star(Ns, means, eps)
+            star = pick_x_star(Xs, means, eps)
             if star is None:
                 continue
-            n, m = star
+            x, m = star
             ax.plot(
-                n, m,
+                x, m,
                 marker="o", markerfacecolor="white", markeredgecolor=color,
                 markersize=18, markeredgewidth=3.2, zorder=5,
             )
 
     # Axes
-    ax.set_xscale("log", base=2)
-    ax.set_xlim(XMIN, XMAX)
-    xticks = [32, 64, 128, 256, 512, 1024, 2048, 4096]
-    # Keep ticks at every position, label every other one (32, 128, 512, 2048).
-    ax.set_xticks(xticks)
-    ax.set_xticklabels([str(x) if i % 2 == 0 else "" for i, x in enumerate(xticks)])
+    ax.set_xscale("log")
+    ax.set_xlim(xlo, xhi)
 
     # y range: fixed upper bound (YMAX) shared across cases; lower bound
     # snug under the lowest shaded band so the curves hug the bottom edge.
-    def lower_band(Ns, M, S):
-        mask = (Ns >= XMIN) & (Ns <= XMAX)
+    def lower_band(Xs, M, S):
+        mask = (Xs >= xlo) & (Xs <= xhi)
         return M[mask] - S[mask]
     ymin_data = float(np.concatenate([
-        lower_band(pN, pM, pS),
-        lower_band(fN, fM, fS),
-        lower_band(feN, feM, feS),
+        lower_band(pXu, pM, pS),
+        lower_band(fXu, fM, fS),
+        lower_band(feXu, feM, feS),
     ]).min())
     ymin = max(0.0, ymin_data - 0.02 * (YMAX - ymin_data))
     ax.set_ylim(ymin, YMAX)
     ax.yaxis.set_major_locator(MultipleLocator(0.5))
 
-    ax.set_xlabel("N (paths per query)", fontsize=FS)
+    ax.set_xlabel(r"Total path-steps  $N \times \overline{\mathrm{steps}}$  ($\times 10^9$)",
+                  fontsize=FS)
     ax.set_ylabel("avg abs error (K)", fontsize=FS)
     ax.tick_params(axis="both", labelsize=FS)
     ax.grid(True, which="major", ls="--", lw=0.6, color="#bbb", alpha=0.7)
