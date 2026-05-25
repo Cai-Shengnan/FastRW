@@ -2,8 +2,9 @@
 
 [English README](README.md)
 
-基于 Apple Metal + C++17 的 GPU 随机游走热模拟求解器，包含 **FastRW /
-FasterRW** 算法的复现实验框架。
+基于 Feynman-Kac 公式的 GPU 随机游走求解器，用于带混合边界条件的
+稳态热问题，并提供 **FastRW / FasterRW** 算法的复现实验框架
+（Apple Metal + C++17）。
 
 <p>
   <img src="docs/figures/bootstrap_case1.png" width="32%">
@@ -20,7 +21,6 @@ FasterRW** 算法的复现实验框架。
 
 ## 目录
 
-- [引用](#引用)
 - [快速开始](#快速开始)
 - [预期结果](#预期结果)
 - [仓库结构](#仓库结构)
@@ -30,23 +30,7 @@ FasterRW** 算法的复现实验框架。
 - [重新生成 COMSOL 先验](#重新生成-comsol-先验)
 - [硬件与平台说明](#硬件与平台说明)
 - [许可证](#许可证)
-
----
-
-## 引用
-
-如果你使用或引用本项目，请引用 FastRW 论文：
-
-```bibtex
-@inproceedings{wang2026fastrw,
-  title = {{FastRW}: An Efficient Random Walk Method for Steady-State Thermal Analysis},
-  author = {Wang, Zixiao and Hou, Tianshu and Wang, Chenghan and Zhuang, Zhen and Ho, Tsung-Yi and Farnia, Farzan and Yu, Bei},
-  booktitle = {Proceedings of the Design, Automation and Test in Europe Conference (DATE)},
-  address = {Verona, Italy},
-  month = apr,
-  year = {2026}
-}
-```
+- [引用](#引用)
 
 ---
 
@@ -351,3 +335,20 @@ COMSOL 输出的 `heat_layer_cell_center_temperatures.bin` 会被复制为
 ## 许可证
 
 MIT —— 详见 [LICENSE](LICENSE)。
+
+---
+
+## 引用
+
+如果你使用或引用本项目，请引用 FastRW 论文：
+
+```bibtex
+@inproceedings{wang2026fastrw,
+  title = {{FastRW}: An Efficient Random Walk Method for Steady-State Thermal Analysis},
+  author = {Wang, Zixiao and Hou, Tianshu and Wang, Chenghan and Zhuang, Zhen and Ho, Tsung-Yi and Farnia, Farzan and Yu, Bei},
+  booktitle = {Proceedings of the Design, Automation and Test in Europe Conference (DATE)},
+  address = {Verona, Italy},
+  month = apr,
+  year = {2026}
+}
+```

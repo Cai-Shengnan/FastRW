@@ -1,7 +1,8 @@
 # FastRW
 
-GPU random-walk thermal solver and experiment harness for the
-**FastRW / FasterRW** algorithms (Apple Metal + C++17).
+Feynman-Kac-based GPU random-walk solver and experiment harness for
+steady-state thermal problems with mixed boundary conditions, featuring
+the **FastRW / FasterRW** algorithms (Apple Metal + C++17).
 
 [中文 README](README.zh.md)
 
@@ -22,7 +23,6 @@ a single one-key driver.
 
 ## Contents
 
-- [Citation](#citation)
 - [Quick start](#quick-start)
 - [Expected results](#expected-results)
 - [Layout](#layout)
@@ -32,23 +32,7 @@ a single one-key driver.
 - [Re-generating COMSOL priors](#re-generating-comsol-priors)
 - [Hardware and platform notes](#hardware-and-platform-notes)
 - [License](#license)
-
----
-
-## Citation
-
-If you use or cite this repository, please cite the FastRW paper:
-
-```bibtex
-@inproceedings{wang2026fastrw,
-  title = {{FastRW}: An Efficient Random Walk Method for Steady-State Thermal Analysis},
-  author = {Wang, Zixiao and Hou, Tianshu and Wang, Chenghan and Zhuang, Zhen and Ho, Tsung-Yi and Farnia, Farzan and Yu, Bei},
-  booktitle = {Proceedings of the Design, Automation and Test in Europe Conference (DATE)},
-  address = {Verona, Italy},
-  month = apr,
-  year = {2026}
-}
-```
+- [Citation](#citation)
 
 ---
 
@@ -364,3 +348,20 @@ The default COMSOL CLI path is
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+## Citation
+
+If you use or cite this repository, please cite the FastRW paper:
+
+```bibtex
+@inproceedings{wang2026fastrw,
+  title = {{FastRW}: An Efficient Random Walk Method for Steady-State Thermal Analysis},
+  author = {Wang, Zixiao and Hou, Tianshu and Wang, Chenghan and Zhuang, Zhen and Ho, Tsung-Yi and Farnia, Farzan and Yu, Bei},
+  booktitle = {Proceedings of the Design, Automation and Test in Europe Conference (DATE)},
+  address = {Verona, Italy},
+  month = apr,
+  year = {2026}
+}
+```
