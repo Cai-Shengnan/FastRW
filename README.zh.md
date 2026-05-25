@@ -20,6 +20,7 @@ FasterRW** 算法的复现实验框架。
 
 ## 目录
 
+- [引用](#引用)
 - [快速开始](#快速开始)
 - [预期结果](#预期结果)
 - [仓库结构](#仓库结构)
@@ -29,6 +30,23 @@ FasterRW** 算法的复现实验框架。
 - [重新生成 COMSOL 先验](#重新生成-comsol-先验)
 - [硬件与平台说明](#硬件与平台说明)
 - [许可证](#许可证)
+
+---
+
+## 引用
+
+如果你使用或引用本项目，请引用 FastRW 论文：
+
+```bibtex
+@inproceedings{wang2026fastrw,
+  title = {{FastRW}: An Efficient Random Walk Method for Steady-State Thermal Analysis},
+  author = {Wang, Zixiao and Hou, Tianshu and Wang, Chenghan and Zhuang, Zhen and Ho, Tsung-Yi and Farnia, Farzan and Yu, Bei},
+  booktitle = {Proceedings of the Design, Automation and Test in Europe Conference (DATE)},
+  address = {Verona, Italy},
+  month = apr,
+  year = {2026}
+}
+```
 
 ---
 

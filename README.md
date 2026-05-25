@@ -22,6 +22,7 @@ a single one-key driver.
 
 ## Contents
 
+- [Citation](#citation)
 - [Quick start](#quick-start)
 - [Expected results](#expected-results)
 - [Layout](#layout)
@@ -31,6 +32,23 @@ a single one-key driver.
 - [Re-generating COMSOL priors](#re-generating-comsol-priors)
 - [Hardware and platform notes](#hardware-and-platform-notes)
 - [License](#license)
+
+---
+
+## Citation
+
+If you use or cite this repository, please cite the FastRW paper:
+
+```bibtex
+@inproceedings{wang2026fastrw,
+  title = {{FastRW}: An Efficient Random Walk Method for Steady-State Thermal Analysis},
+  author = {Wang, Zixiao and Hou, Tianshu and Wang, Chenghan and Zhuang, Zhen and Ho, Tsung-Yi and Farnia, Farzan and Yu, Bei},
+  booktitle = {Proceedings of the Design, Automation and Test in Europe Conference (DATE)},
+  address = {Verona, Italy},
+  month = apr,
+  year = {2026}
+}
+```
 
 ---
 
