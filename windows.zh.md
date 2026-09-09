@@ -162,28 +162,64 @@ RTX 3050 Ti Laptop 上，六个正式 Case 合计约需 90 分钟。实际时间
 outputs\tcad_table1\paper_results
 ```
 
-这里的加速比是达到相同温度误差时，相对于 PIRW 减少的随机游走工作量：
+Table 1 的加速比表示达到相同温度误差时减少的随机游走工作量：
 
 ```text
 工作量 = 样本数 N × 每条路径的平均步数
-加速比 = PIRW 工作量 / 当前算法工作量
+加速比 = PIRW 工作量 / 当前方法工作量
 ```
 
-它不是 Windows 相对 Mac 的硬件速度比。
+两个输入都来自 Windows 复现实验：`N` 由 Windows CUDA 温度样本的
+bootstrap 后处理选出，平均步数从 Windows CUDA 生成的 `direct.csv`
+读取。得到这些实测输入后，该指标的算术计算不再依赖墙钟时间。
 
-## 9. 预期 Table 1 结果
+如需另外生成与硬件相关的墙钟时间分析，可以运行：
 
+```powershell
+node .\scripts\run_wallclock_all.js
+```
 
-已验证的 Windows CUDA 精确结果为：
+## 9. 预期结果
 
-| Case | ε (K) | FastRW CUDA | FasterRW CUDA |
-|---|---:|---:|---:|
-| 1 | 0.4 | 5.242× | 8.737× |
-| 1 | 0.5 | 5.242× | 10.485× |
-| 2 | 0.4 | 5.232× | 10.465× |
-| 2 | 0.5 | 5.232× | 8.721× |
-| 3 | 0.4 | 3.671× | 24.473× |
-| 3 | 0.5 | 4.195× | 27.969× |
+`outputs/report.html` 中主要的 Windows CUDA 结果应为：
+
+**Table 1 — 等精度工作量加速比（N·steps，相对 PIRW）**
+
+|   | ε = 0.4 K | ε = 0.5 K |
+| - | --------- | --------- |
+| Case 1 FastRW   | 5.2× | 5.2× |
+| Case 1 FasterRW | **8.7×** | **10.5×** |
+| Case 2 FastRW   | 5.2× | 5.2× |
+| Case 2 FasterRW | **10.5×** | **8.7×** |
+| Case 3 FastRW   | 3.7× | 4.2× |
+| Case 3 FasterRW | **24.5×** | **28.0×** |
+
+这些数值使用 Windows bootstrap 选出的 `N` 和 Windows CUDA 实测的
+平均步数计算。未取整的结果及其与 Metal 的对比见 `ios_vs_windows.md`。
+
+**tab:time（Case 1，ε = 0.4 K，墙钟时间分解）** — FasterRW 相对 PIRW
+的端到端加速至少为 **7.991×**，FastRW 至少为 4.994×。随机游走仍是
+主要耗时：PIRW、FastRW 和 FasterRW 分别为 16.146、3.140 和 1.884
+秒/查询；FEM 先验的摊销成本小于 0.063 秒/查询。
+
+**tab:multi（Case 1，N = 1000）** — FasterRW 的每查询等效路径数加速
+从 G=1 时的 1.00× 增长到 G=16 时的 **3.73× ± 0.84**；FastRW
+从 1.00× 增长到 1.83× ± 0.24。
+
+**tab:tradeoff（Case 1）** — CUDA 随机游走时间从 DoF=699、
+ε_max=8.71 K 时的 6.39 秒/查询，下降到 DoF=10254、
+ε_max=1.26 K 时的 3.55 秒/查询。
+
+**tab:weakprior（Case 1，ε = 0.4 K）** — 使用环境温度均匀先验时，
+FastRW 在 N=1024 时达到 0.324 K 平均误差，FasterRW 在 N=512 时
+达到 0.390 K；两者相对 PIRW 的 CUDA 随机游走加速比分别为
+1.56× 和 3.12×。
+
+**Bootstrap 图** — 18 个 bootstrap 单元覆盖三个 Case、两个误差阈值
+和三种方法。FastRW 和 FasterRW 均使用比 PIRW 更少的路径达到目标误差。
+
+不同 GPU、驱动版本、功耗限制和散热条件会造成小幅计时差异。各阶段的
+精确测量值保存在 `outputs\tcad_table_time\all_cases_wallclock.json`。
 
 ## 10. 生成 HTML 报告
 

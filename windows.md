@@ -162,28 +162,70 @@ Results are written to:
 outputs\tcad_table1\paper_results
 ```
 
-The reported speedup measures the reduction in random-walk work required to reach the same temperature error:
+The Table 1 speedup is the reduction in random-walk work required to
+reach the same temperature error:
 
 ```text
 work = sample count N × average steps per path
 speedup = PIRW work / current-method work
 ```
 
-It is not the hardware speed of Windows relative to macOS.
+Both inputs come from the Windows reproduction: `N` is selected by the
+bootstrap post-processing of the Windows CUDA temperature samples, and
+the average step count is read from the Windows CUDA `direct.csv` files.
+Once those measured inputs exist, the arithmetic itself is independent
+of wall-clock performance.
 
-## 9. Expected Table 1 Results
+For the separate hardware-dependent wall-clock analysis, run:
 
+```powershell
+node .\scripts\run_wallclock_all.js
+```
 
-The validated Windows CUDA results are:
+## 9. Expected Results
 
-| Case | ε (K) | FastRW CUDA | FasterRW CUDA |
-|---|---:|---:|---:|
-| 1 | 0.4 | 5.242× | 8.737× |
-| 1 | 0.5 | 5.242× | 10.485× |
-| 2 | 0.4 | 5.232× | 10.465× |
-| 2 | 0.5 | 5.232× | 8.721× |
-| 3 | 0.4 | 3.671× | 24.473× |
-| 3 | 0.5 | 4.195× | 27.969× |
+The headline Windows CUDA results in `outputs/report.html` should be:
+
+**Table 1 — iso-accuracy speedup (N·steps over PIRW)**
+
+|   | ε = 0.4 K | ε = 0.5 K |
+| - | --------- | --------- |
+| Case 1 FastRW   | 5.2× | 5.2× |
+| Case 1 FasterRW | **8.7×** | **10.5×** |
+| Case 2 FastRW   | 5.2× | 5.2× |
+| Case 2 FasterRW | **10.5×** | **8.7×** |
+| Case 3 FastRW   | 3.7× | 4.2× |
+| Case 3 FasterRW | **24.5×** | **28.0×** |
+
+These values use the `N` selected from the Windows bootstrap results and
+the average step counts measured by the Windows CUDA runs. Unrounded
+results and the Metal comparison are documented in `ios_vs_windows.md`.
+
+**tab:time (Case 1, ε = 0.4 K, wall-clock breakdown)** — FasterRW is
+**≥ 7.991×** end-to-end over PIRW (FastRW ≥ 4.994×). The random-walk
+stage remains the dominant cost: PIRW 16.146 s vs FastRW 3.140 s vs
+FasterRW 1.884 s per query; FEM-prior amortized cost is < 0.063 s/query.
+
+**tab:multi (Case 1, N = 1000)** — FasterRW per-query equivalent
+path count grows from 1.00× (G=1) to **3.73× ± 0.84** (G=16); FastRW
+grows from 1.00× to 1.83× ± 0.24.
+
+**tab:tradeoff (Case 1)** — CUDA random-walk time per query drops from
+6.39 s (DoF=699, ε_max=8.71 K) to 3.55 s (DoF=10254,
+ε_max=1.26 K).
+
+**tab:weakprior (Case 1, ε = 0.4 K)** — With the uniform ambient prior,
+FastRW reaches 0.324 K mean error at N=1024 and FasterRW reaches
+0.390 K at N=512; their CUDA random-walk speedups over PIRW are
+1.56× and 3.12×, respectively.
+
+**Bootstrap figures** — all 18 bootstrap cells cover three cases, two
+error thresholds, and three methods. FastRW and FasterRW reach each
+target error using fewer paths than PIRW.
+
+Small timing differences are expected across GPUs, driver versions,
+power limits, and cooling conditions. The exact per-stage measurements
+are stored in `outputs\tcad_table_time\all_cases_wallclock.json`.
 
 ## 10. Generate the HTML Report
 
